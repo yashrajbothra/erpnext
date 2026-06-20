@@ -50,8 +50,9 @@ class ExpenseAccountService:
 			):
 				if doc.update_stock and item.warehouse and (not item.from_warehouse):
 					_inv_dict = doc.get_inventory_account_dict(item, inventory_account_map)
-
-					item.expense_account = _inv_dict["account"]
+					if not _inv_dict:
+						frappe.log_error(f"Empty _inv_dict for item {item.item_code}, warehouse {item.warehouse}. inventory_account_map keys: {list(inventory_account_map.keys()) if inventory_account_map else 'None'}", "Expense Account Resolution Error")
+					item.expense_account = _inv_dict.get("account")
 				else:
 					# check if 'Stock Received But Not Billed' account is credited in Purchase receipt or not
 					if item.purchase_receipt:

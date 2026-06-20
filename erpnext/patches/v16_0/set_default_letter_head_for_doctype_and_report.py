@@ -3,6 +3,9 @@ from frappe.query_builder import DocType
 
 
 def execute():
+	if "letter_head_for" not in frappe.db.get_table_columns("Letter Head"):
+		return
+
 	LH = DocType("Letter Head")
 	update_letter_head_for_query = (
 		frappe.qb.update(LH).set(LH.letter_head_for, "DocType").where(LH.letter_head_for.isnull())
