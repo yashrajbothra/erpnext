@@ -16,11 +16,7 @@ import erpnext
 from erpnext.stock.doctype.inventory_dimension.inventory_dimension import get_inventory_dimensions
 from erpnext.stock.doctype.stock_closing_entry.stock_closing_entry import StockClosing
 from erpnext.stock.doctype.warehouse.warehouse import apply_warehouse_filter
-from erpnext.stock.report.stock_ageing.stock_ageing import (
-	FIFOSlots,
-	get_average_age,
-	normalize_fifo_queue,
-)
+from erpnext.stock.report.stock_ageing.stock_ageing import FIFOSlots, get_average_age
 from erpnext.stock.utils import add_additional_uom_columns
 
 
@@ -35,7 +31,6 @@ class StockBalanceFilter(TypedDict):
 	include_uom: str | None  # include extra info in converted UOM
 	show_stock_ageing_data: bool
 	show_variant_attributes: bool
-	show_alt_uom_balance: bool
 
 
 SLEntry = dict[str, Any]
@@ -48,7 +43,7 @@ def execute(filters: StockBalanceFilter | None = None):
 class StockBalanceReport:
 	def __init__(self, filters: StockBalanceFilter | None) -> None:
 		self.filters = filters
-		self.from_date = getdate(filters.get("from_date"))
+		self.from_date = getdate(filters.get("from_date")) if filters.get("from_date") else None
 		self.to_date = getdate(filters.get("to_date"))
 
 		self.start_from = None
@@ -77,37 +72,51 @@ class StockBalanceReport:
 			self.columns = self.get_columns()
 
 		self.add_additional_uom_columns()
-		self.add_alt_uom_columns()
 
 		return self.columns, self.data
 
 	def prepare_opening_stock(self) -> None:
+		if not self.from_date:
+			return
 		opening_entries = self.get_entries_from_stock_closing_balance()
 
 		for entry in opening_entries:
 			key = self.get_group_by_key(entry)
 
-			self.item_warehouse_map[key] = frappe._dict(
-				{
-					"item_code": entry.item_code,
-					"warehouse": entry.warehouse,
-					"item_group": entry.item_group,
-					"company": entry.company,
-					"currency": self.company_currency,
-					"stock_uom": entry.stock_uom,
-					"item_name": entry.item_name,
-					"opening_qty": entry.actual_qty,
-					"opening_val": entry.stock_value_difference,
-					"opening_fifo_queue": json.loads(entry.fifo_queue) if entry.fifo_queue else [],
-					"in_qty": 0.0,
-					"in_val": 0.0,
-					"out_qty": 0.0,
-					"out_val": 0.0,
-					"bal_qty": entry.actual_qty,
-					"bal_val": entry.stock_value_difference,
-					"val_rate": 0.0,
-				}
-			)
+			if key not in self.item_warehouse_map:
+				self.item_warehouse_map[key] = frappe._dict(
+					{
+						"item_code": entry.item_code,
+						"warehouse": entry.warehouse,
+						"batch_no": entry.get("batch_no") if cint(self.filters.get("segregate_serial_batch_bundle")) else None,
+						"item_group": entry.item_group,
+						"company": entry.company,
+						"currency": self.company_currency,
+						"stock_uom": entry.stock_uom,
+						"item_name": entry.item_name,
+						"opening_qty": entry.actual_qty,
+						"opening_val": entry.stock_value_difference,
+						"opening_pieces": entry.get("custom_pieces", 0.0),
+						"opening_fifo_queue": json.loads(entry.fifo_queue) if entry.fifo_queue else [],
+						"in_qty": 0.0,
+						"in_val": 0.0,
+						"in_pieces": 0.0,
+						"out_qty": 0.0,
+						"out_val": 0.0,
+						"out_pieces": 0.0,
+						"bal_qty": entry.actual_qty,
+						"bal_val": entry.stock_value_difference,
+						"bal_pieces": entry.get("custom_pieces", 0.0),
+						"val_rate": 0.0,
+					}
+				)
+			else:
+				self.item_warehouse_map[key].opening_qty += entry.actual_qty
+				self.item_warehouse_map[key].opening_val += entry.stock_value_difference
+				self.item_warehouse_map[key].opening_pieces += entry.get("custom_pieces", 0.0)
+				self.item_warehouse_map[key].bal_qty += entry.actual_qty
+				self.item_warehouse_map[key].bal_val += entry.stock_value_difference
+				self.item_warehouse_map[key].bal_pieces += entry.get("custom_pieces", 0.0)
 
 	def get_entries_from_stock_closing_balance(self) -> list:
 		stk_cl_obj = StockClosing(self.filters.company, self.from_date, self.from_date)
@@ -139,7 +148,7 @@ class StockBalanceReport:
 		return opening_entries
 
 	def filter_fields(self) -> list[str]:
-		fields = ["item_code", "warehouse"]
+		fields = ["item_code", "warehouse", "batch_no"]
 
 		for field in self.inventory_dimensions:
 			fields.append(field)
@@ -172,6 +181,7 @@ class StockBalanceReport:
 				sle.serial_and_batch_bundle,
 				sle.has_serial_no,
 				sle.voucher_detail_no,
+				sle.custom_pieces,
 				item_table.item_group,
 				item_table.stock_uom,
 				item_table.item_name,
@@ -185,11 +195,26 @@ class StockBalanceReport:
 		query = self.apply_warehouse_filters(query, sle)
 		query = self.apply_items_filters(query, item_table)
 		query = self.apply_date_filters(query, sle)
+		query = self.apply_batch_filters(query, sle)
 
 		if self.filters.get("company"):
 			query = query.where(sle.company == self.filters.get("company"))
 
 		self.sle_query = query
+
+	def apply_batch_filters(self, query, sle) -> str:
+		if self.filters.get("batch_no"):
+			from erpnext.stock.report.stock_ledger.stock_ledger import get_serial_and_batch_bundles
+			bundles = get_serial_and_batch_bundles(self.filters)
+
+			if bundles:
+				query = query.where(
+					(sle.serial_and_batch_bundle.isin(bundles)) | (sle.batch_no == self.filters.get("batch_no"))
+				)
+			else:
+				query = query.where(sle.batch_no == self.filters.get("batch_no"))
+
+		return query
 
 	def prepare_item_warehouse_map_for_current_period(self):
 		self.opening_vouchers = self.get_opening_vouchers()
@@ -201,16 +226,45 @@ class StockBalanceReport:
 
 		# HACK: This is required to avoid causing db query in flt
 		_system_settings = frappe.get_cached_doc("System Settings")
-		with frappe.db.unbuffered_cursor():
-			if not self.filters.get("show_stock_ageing_data"):
-				self.sle_entries = self.sle_query.run(as_dict=True, as_iterator=True)
+		if not self.filters.get("show_stock_ageing_data"):
+			self.sle_entries = self.sle_query.run(as_dict=True)
 
-			for entry in self.sle_entries:
-				group_by_key = self.get_group_by_key(entry)
-				if group_by_key not in self.item_warehouse_map:
-					self.initialize_data(group_by_key, entry)
+		from erpnext.stock.report.stock_ledger.stock_ledger import get_serial_batch_bundle_details
+		bundle_details = {}
+		if cint(self.filters.get("segregate_serial_batch_bundle")):
+			bundle_details = get_serial_batch_bundle_details(self.sle_entries, self.filters)
 
-				self.prepare_item_warehouse_map(entry, group_by_key)
+		expanded_sle_entries = []
+		for entry in self.sle_entries:
+			if entry.serial_and_batch_bundle and entry.serial_and_batch_bundle in bundle_details:
+				for row in bundle_details[entry.serial_and_batch_bundle]:
+					new_entry = frappe._dict(entry.copy())
+					new_entry.update(row)
+					new_entry.actual_qty = row.get("qty", entry.actual_qty)
+					new_entry.stock_value_difference = row.get("stock_value_difference", entry.stock_value_difference)
+					
+					row_pieces = flt(entry.custom_pieces) * (flt(row.qty) / flt(entry.actual_qty)) if entry.actual_qty else 0.0
+					if entry.voucher_type != "Stock Reconciliation":
+						if row.qty < 0:
+							row_pieces = -abs(row_pieces)
+						elif row.qty > 0:
+							row_pieces = abs(row_pieces)
+						else:
+							row_pieces = 0.0
+						
+					new_entry.custom_pieces = row_pieces
+					expanded_sle_entries.append(new_entry)
+			else:
+				expanded_sle_entries.append(entry)
+
+		self.sle_entries = expanded_sle_entries
+
+		for entry in self.sle_entries:
+			group_by_key = self.get_group_by_key(entry)
+			if group_by_key not in self.item_warehouse_map:
+				self.initialize_data(group_by_key, entry)
+
+			self.prepare_item_warehouse_map(entry, group_by_key)
 
 		self.item_warehouse_map = filter_items_with_no_transactions(
 			self.item_warehouse_map, self.float_precision, self.inventory_dimensions
@@ -285,6 +339,9 @@ class StockBalanceReport:
 		if self.filters.get("show_stock_ageing_data"):
 			self.filters["show_warehouse_wise_stock"] = True
 			item_wise_fifo_queue = FIFOSlots(self.filters).generate()
+			self.item_wise_fifo_queue = item_wise_fifo_queue
+
+		_func = itemgetter(1)
 
 		del self.sle_entries
 
@@ -294,15 +351,97 @@ class StockBalanceReport:
 		if self.filters.get("show_variant_attributes"):
 			variant_values = self.get_variant_values_for()
 
+		import re
+
 		for _key, report_data in self.item_warehouse_map.items():
 			if variant_data := variant_values.get(report_data.item_code):
 				report_data.update(variant_data)
+
+			item_code = report_data.item_code
+			batch_no = report_data.get("batch_no")
+
+			if cint(self.filters.get("segregate_serial_batch_bundle")) and not batch_no:
+				continue
+
+			if not batch_no:
+				if not report_data.get("serial_and_batch_bundle"):
+					batch_no = frappe.db.get_value("Batch", {"item": item_code}, "name", order_by="creation desc")
+				elif self.filters.get("batch_no"):
+					batch_no = self.filters.batch_no
+					
+			if not batch_no:
+				continue
+
+			size = ""
+			schedule = ""
+			if batch_no:
+				if "MIX" in str(batch_no).upper():
+					size = "MIX"
+					schedule = "MIX"
+				else:
+					od_match = re.search(r"OD\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+					thk_match = re.search(r"THK\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+
+					od = flt(od_match.group(1)) if od_match else None
+					thk = flt(thk_match.group(1)) if thk_match else None
+
+					if od:
+						if thk:
+							pipe_dim = frappe.db.get_value(
+								"Pipe Dimension Master",
+								{"od_mm": od, "thickness_mm": thk},
+								["nb", "schedule"],
+								as_dict=True,
+							)
+							if pipe_dim:
+								size = pipe_dim.nb
+								schedule = pipe_dim.schedule
+
+						if not size:
+							pipe_dim = frappe.db.get_value(
+								"Pipe Dimension Master",
+								{"od_mm": od},
+								["nb", "schedule"],
+								as_dict=True,
+							)
+							if pipe_dim:
+								size = pipe_dim.nb
+								schedule = f"{thk} MM" if thk else None
+
+					if not size:
+						if od:
+							size = f"{od} MM"
+						if thk:
+							schedule = f"{thk} MM"
+
+			report_data["custom_size"] = size
+			report_data["custom_schedule"] = schedule
+
+			filter_size = self.filters.get("custom_size")
+			if filter_size:
+				if isinstance(filter_size, str):
+					filter_size = [s.strip() for s in filter_size.split(",") if s.strip()]
+				if isinstance(filter_size, list):
+					if not any(str(s).strip().lower() == str(report_data.get("custom_size", "")).strip().lower() for s in filter_size):
+						continue
+
+			filter_schedule = self.filters.get("custom_schedule")
+			if filter_schedule:
+				if isinstance(filter_schedule, str):
+					filter_schedule = [s.strip() for s in filter_schedule.split(",") if s.strip()]
+				if isinstance(filter_schedule, list):
+					if not any(str(s).strip().lower() == str(report_data.get("custom_schedule", "")).strip().lower() for s in filter_schedule):
+						continue
 
 			if self.filters.get("show_stock_ageing_data"):
 				opening_fifo_queue = self.get_opening_fifo_queue(report_data) or []
 
 				fifo_queue = []
-				if fifo_queue := item_wise_fifo_queue.get((report_data.item_code, report_data.warehouse)):
+				key = (report_data.item_code, report_data.warehouse)
+				if cint(self.filters.get("segregate_serial_batch_bundle")) and report_data.get("batch_no"):
+					key = (report_data.item_code, report_data.warehouse, report_data.batch_no)
+
+				if fifo_queue := item_wise_fifo_queue.get(key):
 					fifo_queue = fifo_queue.get("fifo_queue")
 
 				if fifo_queue:
@@ -311,7 +450,15 @@ class StockBalanceReport:
 				stock_ageing_data = {"average_age": 0, "earliest_age": 0, "latest_age": 0}
 
 				if opening_fifo_queue:
-					stock_ageing_data.update(get_stock_ageing_data(opening_fifo_queue, self.to_date))
+					fifo_queue = sorted(filter(_func, opening_fifo_queue), key=_func)
+					if not fifo_queue:
+						continue
+
+					to_date = self.to_date
+					stock_ageing_data["average_age"] = get_average_age(fifo_queue, to_date)
+					stock_ageing_data["earliest_age"] = date_diff(to_date, fifo_queue[0][1])
+					stock_ageing_data["latest_age"] = date_diff(to_date, fifo_queue[-1][1])
+					stock_ageing_data["fifo_queue"] = fifo_queue
 
 				report_data.update(stock_ageing_data)
 
@@ -346,32 +493,50 @@ class StockBalanceReport:
 		for field in self.inventory_dimensions:
 			qty_dict[field] = entry.get(field)
 
-		if entry.voucher_type == "Stock Reconciliation" and (
+		is_batch_entry = entry.get("batch_no") and cint(self.filters.get("segregate_serial_batch_bundle"))
+
+		if entry.voucher_type == "Stock Reconciliation" and not is_batch_entry and (
 			not entry.batch_no or entry.serial_no or entry.serial_and_batch_bundle
 		):
 			if entry.serial_no and entry.voucher_detail_no in self.stock_reco_voucher_wise_count:
 				qty_dict.opening_qty -= self.stock_reco_voucher_wise_count.get(entry.voucher_detail_no, 0)
 				qty_dict.bal_qty = 0.0
+				qty_dict.bal_pieces = 0.0
 				qty_diff = flt(entry.actual_qty)
-				value_diff = flt(entry.stock_value_difference)
+				pieces_diff = flt(entry.get("custom_pieces"))
 			else:
 				qty_diff = flt(entry.qty_after_transaction) - flt(qty_dict.bal_qty)
-				value_diff = flt(entry.stock_value) - flt(qty_dict.bal_val)
+				pieces_diff = flt(entry.get("custom_pieces"))
 		else:
 			qty_diff = flt(entry.actual_qty)
-			value_diff = flt(entry.stock_value_difference)
+			pieces_diff = flt(entry.get("custom_pieces"))
+			if entry.voucher_type != "Stock Reconciliation":
+				if entry.actual_qty < 0:
+					pieces_diff = -abs(pieces_diff)
+				elif entry.actual_qty > 0:
+					pieces_diff = abs(pieces_diff)
+				else:
+					pieces_diff = 0.0
 
-		if entry.posting_date < self.from_date or entry.voucher_no in self.opening_vouchers.get(
+		value_diff = flt(entry.stock_value_difference)
+
+		if self.from_date and (entry.posting_date < self.from_date or entry.voucher_no in self.opening_vouchers.get(
 			entry.voucher_type, []
-		):
+		)):
 			qty_dict.opening_qty += qty_diff
 			qty_dict.opening_val += value_diff
+			qty_dict.opening_pieces += pieces_diff
 
-		elif entry.posting_date >= self.from_date and entry.posting_date <= self.to_date:
+		elif not self.from_date or (entry.posting_date >= self.from_date and entry.posting_date <= self.to_date):
 			if flt(qty_diff, self.float_precision) >= 0:
 				qty_dict.in_qty += qty_diff
 			else:
 				qty_dict.out_qty += abs(qty_diff)
+
+			if flt(pieces_diff, self.float_precision) >= 0:
+				qty_dict.in_pieces += pieces_diff
+			else:
+				qty_dict.out_pieces += abs(pieces_diff)
 
 			if flt(value_diff, self.float_precision) >= 0:
 				qty_dict.in_val += value_diff
@@ -381,12 +546,14 @@ class StockBalanceReport:
 		qty_dict.val_rate = entry.valuation_rate
 		qty_dict.bal_qty += qty_diff
 		qty_dict.bal_val += value_diff
+		qty_dict.bal_pieces += pieces_diff
 
 	def initialize_data(self, group_by_key, entry):
 		self.item_warehouse_map[group_by_key] = frappe._dict(
 			{
 				"item_code": entry.item_code,
 				"warehouse": entry.warehouse,
+				"batch_no": entry.get("batch_no") if cint(self.filters.get("segregate_serial_batch_bundle")) else None,
 				"item_group": entry.item_group,
 				"company": entry.company,
 				"currency": self.company_currency,
@@ -394,19 +561,26 @@ class StockBalanceReport:
 				"item_name": entry.item_name,
 				"opening_qty": 0.0,
 				"opening_val": 0.0,
+				"opening_pieces": 0.0,
 				"opening_fifo_queue": [],
 				"in_qty": 0.0,
 				"in_val": 0.0,
+				"in_pieces": 0.0,
 				"out_qty": 0.0,
 				"out_val": 0.0,
+				"out_pieces": 0.0,
 				"bal_qty": 0.0,
 				"bal_val": 0.0,
+				"bal_pieces": 0.0,
 				"val_rate": 0.0,
 			}
 		)
 
 	def get_group_by_key(self, row) -> tuple:
 		group_by_key = [row.item_code, row.warehouse]
+
+		if cint(self.filters.get("segregate_serial_batch_bundle")) and row.get("batch_no"):
+			group_by_key.append(row.get("batch_no"))
 
 		for fieldname in self.inventory_dimensions:
 			if not row.get(fieldname):
@@ -466,20 +640,17 @@ class StockBalanceReport:
 
 	def get_columns(self):
 		columns = [
-			{
-				"label": _("Item"),
-				"fieldname": "item_code",
-				"fieldtype": "Link",
-				"options": "Item",
-				"width": 100,
-				"sticky": "True",
-			},
 			{"label": _("Item Name"), "fieldname": "item_name", "width": 150},
 			{
-				"label": _("Item Group"),
-				"fieldname": "item_group",
-				"fieldtype": "Link",
-				"options": "Item Group",
+				"label": _("Size"),
+				"fieldname": "custom_size",
+				"fieldtype": "Data",
+				"width": 100,
+			},
+			{
+				"label": _("OD/Schedule"),
+				"fieldname": "custom_schedule",
+				"fieldtype": "Data",
 				"width": 100,
 			},
 			{
@@ -487,8 +658,7 @@ class StockBalanceReport:
 				"fieldname": "warehouse",
 				"fieldtype": "Link",
 				"options": "Warehouse",
-				"width": 100,
-				"sticky": "True",
+				"width": 120,
 			},
 		]
 
@@ -507,11 +677,10 @@ class StockBalanceReport:
 		columns.extend(
 			[
 				{
-					"label": _("Stock UOM"),
-					"fieldname": "stock_uom",
-					"fieldtype": "Link",
-					"options": "UOM",
-					"width": 90,
+					"label": _("Balance Pieces"),
+					"fieldname": "bal_pieces",
+					"fieldtype": "Float",
+					"width": 100,
 				},
 				{
 					"label": _("Balance Qty"),
@@ -519,15 +688,6 @@ class StockBalanceReport:
 					"fieldtype": "Float",
 					"width": 100,
 					"convertible": "qty",
-					"sticky": "True",
-				},
-				{
-					"label": _("Balance Value"),
-					"fieldname": "bal_val",
-					"fieldtype": "Currency",
-					"width": 100,
-					"options": "Company:company:default_currency",
-					"sticky": "True",
 				},
 				{
 					"label": _("Opening Qty"),
@@ -537,6 +697,46 @@ class StockBalanceReport:
 					"convertible": "qty",
 				},
 				{
+					"label": _("Opening Pieces"),
+					"fieldname": "opening_pieces",
+					"fieldtype": "Float",
+					"width": 100,
+				},
+				{
+					"label": _("In Qty"),
+					"fieldname": "in_qty",
+					"fieldtype": "Float",
+					"width": 100,
+					"convertible": "qty",
+				},
+				{
+					"label": _("In Pieces"),
+					"fieldname": "in_pieces",
+					"fieldtype": "Float",
+					"width": 100,
+				},
+				{
+					"label": _("Out Qty"),
+					"fieldname": "out_qty",
+					"fieldtype": "Float",
+					"width": 100,
+					"convertible": "qty",
+				},
+				{
+					"label": _("Out Pieces"),
+					"fieldname": "out_pieces",
+					"fieldtype": "Float",
+					"width": 100,
+				},
+			{
+				"label": _("Batch"),
+				"fieldname": "batch_no",
+				"fieldtype": "Link",
+				"options": "Batch",
+				"width": 150,
+				"hidden": not cint(self.filters.get("segregate_serial_batch_bundle")),
+			},
+				{
 					"label": _("Opening Value"),
 					"fieldname": "opening_val",
 					"fieldtype": "Currency",
@@ -544,44 +744,32 @@ class StockBalanceReport:
 					"options": "Company:company:default_currency",
 				},
 				{
-					"label": _("In Qty"),
-					"fieldname": "in_qty",
-					"fieldtype": "Float",
-					"width": 80,
-					"convertible": "qty",
+					"label": _("In Value"),
+					"fieldname": "in_val",
+					"fieldtype": "Currency",
+					"width": 110,
+					"options": "Company:company:default_currency",
 				},
-				{"label": _("In Value"), "fieldname": "in_val", "fieldtype": "Float", "width": 80},
 				{
-					"label": _("Out Qty"),
-					"fieldname": "out_qty",
-					"fieldtype": "Float",
-					"width": 80,
-					"convertible": "qty",
+					"label": _("Out Value"),
+					"fieldname": "out_val",
+					"fieldtype": "Currency",
+					"width": 110,
+					"options": "Company:company:default_currency",
 				},
-				{"label": _("Out Value"), "fieldname": "out_val", "fieldtype": "Float", "width": 80},
+				{
+					"label": _("Balance Value"),
+					"fieldname": "bal_val",
+					"fieldtype": "Currency",
+					"width": 110,
+					"options": "Company:company:default_currency",
+				},
 				{
 					"label": _("Valuation Rate"),
 					"fieldname": "val_rate",
-					"fieldtype": self.filters.valuation_field_type or "Currency",
-					"width": 90,
-					"convertible": "rate",
-					"options": "Company:company:default_currency"
-					if self.filters.valuation_field_type == "Currency"
-					else None,
-				},
-				{
-					"label": _("Reserved Stock"),
-					"fieldname": "reserved_stock",
-					"fieldtype": "Float",
-					"width": 80,
-					"convertible": "qty",
-				},
-				{
-					"label": _("Company"),
-					"fieldname": "company",
-					"fieldtype": "Link",
-					"options": "Company",
-					"width": 100,
+					"fieldtype": "Currency",
+					"width": 110,
+					"options": "Company:company:default_currency",
 				},
 			]
 		)
@@ -607,87 +795,6 @@ class StockBalanceReport:
 
 		conversion_factors = self.get_itemwise_conversion_factor()
 		add_additional_uom_columns(self.columns, self.data, self.filters.include_uom, conversion_factors)
-
-	def add_alt_uom_columns(self) -> None:
-		"""Add an alternate UOM balance column after the Balance Qty column."""
-		if not self.filters.get("show_alt_uom_balance"):
-			return
-
-		item_alt_uom_map = self.get_item_alt_uom_map()
-		if not item_alt_uom_map:
-			return
-
-		bal_qty_idx = next(
-			(
-				i
-				for i, col in enumerate(self.columns)
-				if isinstance(col, dict) and col.get("fieldname") == "bal_qty"
-			),
-			None,
-		)
-		if bal_qty_idx is None:
-			return
-
-		# Insert in reverse so "Alt UOM" name column appears before qty column
-		self.columns.insert(
-			bal_qty_idx + 1,
-			{
-				"label": _("Balance Qty (Alt UOM)"),
-				"fieldname": "alt_uom_bal_qty",
-				"fieldtype": "Float",
-				"width": 140,
-			},
-		)
-		self.columns.insert(
-			bal_qty_idx + 1,
-			{
-				"label": _("Alt UOM"),
-				"fieldname": "alt_uom",
-				"fieldtype": "Data",
-				"width": 90,
-			},
-		)
-
-		for row in self.data:
-			alt_uoms = item_alt_uom_map.get(row.item_code, [])
-			if alt_uoms:
-				uom, factor = alt_uoms[0]["uom"], flt(alt_uoms[0]["conversion_factor"])
-				row["alt_uom"] = uom
-				row["alt_uom_bal_qty"] = flt(row.get("bal_qty", 0)) / factor if factor else 0.0
-			else:
-				row["alt_uom"] = ""
-				row["alt_uom_bal_qty"] = 0.0
-
-	def get_item_alt_uom_map(self) -> dict:
-		"""Return {item_code: [{uom, conversion_factor}, ...]} for alternate UOMs (excluding stock UOM)."""
-		item_codes = list({d["item_code"] for d in self.data})
-		if not item_codes:
-			return {}
-
-		uom_detail = frappe.qb.DocType("UOM Conversion Detail")
-		item_table = frappe.qb.DocType("Item")
-
-		rows = (
-			frappe.qb.from_(uom_detail)
-			.join(item_table)
-			.on(uom_detail.parent == item_table.name)
-			.select(uom_detail.parent, uom_detail.uom, uom_detail.conversion_factor)
-			.where(
-				(uom_detail.parenttype == "Item")
-				& (uom_detail.parent.isin(item_codes))
-				& (uom_detail.uom != item_table.stock_uom)
-			)
-			.orderby(uom_detail.parent)
-			.orderby(uom_detail.idx)
-		).run(as_dict=True)
-
-		result: dict = {}
-		for row in rows:
-			result.setdefault(row.parent, [])
-			if not result[row.parent]:  # keep only the first alternate UOM (lowest idx)
-				result[row.parent].append({"uom": row.uom, "conversion_factor": row.conversion_factor})
-
-		return result
 
 	def get_itemwise_conversion_factor(self):
 		items = []
@@ -780,21 +887,6 @@ class StockBalanceReport:
 		return opening_fifo_queue
 
 
-def get_stock_ageing_data(fifo_queue: list, to_date: str) -> dict:
-	stock_ageing_data = {"average_age": 0, "earliest_age": 0, "latest_age": 0}
-	fifo_queue = sorted(filter(itemgetter(1), normalize_fifo_queue(fifo_queue)), key=itemgetter(1))
-
-	if not fifo_queue:
-		return stock_ageing_data
-
-	stock_ageing_data["average_age"] = get_average_age(fifo_queue, to_date)
-	stock_ageing_data["earliest_age"] = date_diff(to_date, fifo_queue[0][1])
-	stock_ageing_data["latest_age"] = date_diff(to_date, fifo_queue[-1][1])
-	stock_ageing_data["fifo_queue"] = fifo_queue
-
-	return stock_ageing_data
-
-
 def filter_items_with_no_transactions(
 	iwb_map, float_precision: float, inventory_dimensions: list | None = None
 ):
@@ -810,6 +902,7 @@ def filter_items_with_no_transactions(
 			if key in [
 				"item_code",
 				"warehouse",
+				"batch_no",
 				"item_name",
 				"item_group",
 				"project",

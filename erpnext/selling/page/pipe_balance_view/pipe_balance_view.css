@@ -1,0 +1,66 @@
+:root {
+    --pipe-primary: #1e293b;
+    --pipe-bg: #ffffff;
+    --pipe-border: #e2e8f0;
+    --pipe-text: #1e293b;
+}
+
+.pipe-dashboard {
+    padding: 10px;
+    background: var(--pipe-bg);
+}
+
+.pipe-table-container {
+    border: 1px solid var(--pipe-border);
+    border-radius: 4px;
+    overflow-x: auto;
+}
+
+.pipe-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: inherit;
+    font-size: 13px;
+}
+
+.pipe-table th, .pipe-table td {
+    padding: 8px 12px;
+    border: 1px solid var(--pipe-border);
+    text-align: left;
+    color: var(--pipe-text);
+}
+
+.pipe-table th {
+    background: #f8fafc;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.page-actions .btn-primary {
+    background-color: var(--pipe-primary) !important;
+    border-color: var(--pipe-primary) !important;
+    color: #fff !important;
+}
+
+.pipe-table tr.row-empty td {
+    background-color: #fef08a !important; /* Soft yellow */
+}
+
+.pipe-table tr:hover td {
+    background: #f1f5f9;
+}
+
+/* Compact status alignment */
+.l-days-critical { color: #dc2626; font-weight: 600; }
+.l-days-warning { color: #d97706; font-weight: 600; }
+.l-days-normal { color: #059669; }
+
+/* Filter Bar Adjustments (Frappe Standard) */
+.page-form {
+    background: #fff;
+    padding: 10px;
+    border-bottom: 1px solid var(--pipe-border);
+    margin-bottom: 15px;
+}

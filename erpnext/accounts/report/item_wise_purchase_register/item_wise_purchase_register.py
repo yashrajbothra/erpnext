@@ -56,6 +56,69 @@ def _execute(filters=None, additional_table_columns=None):
 		grand_total = get_grand_total(filters, "Purchase Invoice")
 
 	for d in item_list:
+		import re
+
+		batch_no = d.batch_no
+		size = ""
+		schedule = ""
+		if batch_no:
+			if "MIX" in str(batch_no).upper():
+				size = "MIX"
+				schedule = "MIX"
+			else:
+				od_match = re.search(r"OD\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+				thk_match = re.search(r"THK\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+
+				od = flt(od_match.group(1)) if od_match else None
+				thk = flt(thk_match.group(1)) if thk_match else None
+
+				if od:
+					if thk:
+						pipe_dim = frappe.db.get_value(
+							"Pipe Dimension Master",
+							{"od_mm": od, "thickness_mm": thk},
+							["nb", "schedule"],
+							as_dict=True,
+						)
+						if pipe_dim:
+							size = pipe_dim.nb
+							schedule = pipe_dim.schedule
+
+					if not size:
+						pipe_dim = frappe.db.get_value(
+							"Pipe Dimension Master",
+							{"od_mm": od},
+							["nb", "schedule"],
+							as_dict=True,
+						)
+						if pipe_dim:
+							size = pipe_dim.nb
+							schedule = f"{thk} MM" if thk else None
+
+				if not size:
+					if od:
+						size = f"{od} MM"
+					if thk:
+						schedule = f"{thk} MM"
+
+		# In-memory filtering by size
+		filter_size = filters.get("custom_size")
+		if filter_size:
+			if isinstance(filter_size, str):
+				filter_size = [s.strip() for s in filter_size.split(",") if s.strip()]
+			if isinstance(filter_size, list):
+				if not any(str(s).strip().lower() == str(size).strip().lower() for s in filter_size):
+					continue
+
+		# In-memory filtering by schedule/OD
+		filter_schedule = filters.get("custom_schedule")
+		if filter_schedule:
+			if isinstance(filter_schedule, str):
+				filter_schedule = [s.strip() for s in filter_schedule.split(",") if s.strip()]
+			if isinstance(filter_schedule, list):
+				if not any(str(s).strip().lower() == str(schedule).strip().lower() for s in filter_schedule):
+					continue
+
 		purchase_receipt = None
 		if d.purchase_receipt:
 			purchase_receipt = d.purchase_receipt
@@ -70,6 +133,8 @@ def _execute(filters=None, additional_table_columns=None):
 			"item_code": d.item_code,
 			"item_name": d.pi_item_name if d.pi_item_name else d.i_item_name,
 			"item_group": d.pi_item_group if d.pi_item_group else d.i_item_group,
+			"custom_size": size,
+			"custom_schedule": schedule,
 			"description": d.description,
 			"invoice": d.parent,
 			"posting_date": d.posting_date,
@@ -144,40 +209,30 @@ def get_columns(additional_table_columns, filters):
 	if filters.get("group_by") != ("Item"):
 		columns.extend(
 			[
-				{
-					"label": _("Item Code"),
-					"fieldname": "item_code",
-					"fieldtype": "Link",
-					"options": "Item",
-					"width": 120,
-				},
-				{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 120},
-			]
-		)
-
-	if filters.get("group_by") not in ("Item", "Item Group"):
-		columns.extend(
-			[
-				{
-					"label": _("Item Group"),
-					"fieldname": "item_group",
-					"fieldtype": "Link",
-					"options": "Item Group",
-					"width": 120,
-				}
+				{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 240},
 			]
 		)
 
 	columns.extend(
 		[
-			{"label": _("Description"), "fieldname": "description", "fieldtype": "Data", "width": 150},
 			{
-				"label": _("Invoice"),
-				"fieldname": "invoice",
-				"fieldtype": "Link",
-				"options": "Purchase Invoice",
-				"width": 150,
+				"label": _("Size"),
+				"fieldname": "custom_size",
+				"fieldtype": "Data",
+				"width": 100,
 			},
+			{
+				"label": _("OD/Schedule"),
+				"fieldname": "custom_schedule",
+				"fieldtype": "Data",
+				"width": 100,
+			},
+		{"label": _("Stock Qty"), "fieldname": "stock_qty", "fieldtype": "Float", "width": 100},
+		]
+	)
+
+	columns.extend(
+		[
 			{"label": _("Posting Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 120},
 		]
 	)
@@ -190,12 +245,6 @@ def get_columns(additional_table_columns, filters):
 					"fieldname": "supplier",
 					"fieldtype": "Link",
 					"options": "Supplier",
-					"width": 120,
-				},
-				{
-					"label": _("Supplier Name"),
-					"fieldname": "supplier_name",
-					"fieldtype": "Data",
 					"width": 120,
 				},
 			]
@@ -211,6 +260,20 @@ def get_columns(additional_table_columns, filters):
 			"fieldtype": "Link",
 			"options": "Account",
 			"width": 80,
+		},
+		{
+			"label": _("Rate"),
+			"fieldname": "rate",
+			"fieldtype": "Float",
+			"options": "currency",
+			"width": 100,
+		},
+		{
+			"label": _("Amount"),
+			"fieldname": "amount",
+			"fieldtype": "Currency",
+			"options": "currency",
+			"width": 100,
 		},
 		{
 			"label": _("Mode Of Payment"),
@@ -254,7 +317,6 @@ def get_columns(additional_table_columns, filters):
 			"options": "Account",
 			"width": 100,
 		},
-		{"label": _("Stock Qty"), "fieldname": "stock_qty", "fieldtype": "Float", "width": 100},
 		{
 			"label": _("Stock UOM"),
 			"fieldname": "stock_uom",
@@ -263,18 +325,11 @@ def get_columns(additional_table_columns, filters):
 			"width": 100,
 		},
 		{
-			"label": _("Rate"),
-			"fieldname": "rate",
-			"fieldtype": "Float",
-			"options": "currency",
-			"width": 100,
-		},
-		{
-			"label": _("Amount"),
-			"fieldname": "amount",
-			"fieldtype": "Currency",
-			"options": "currency",
-			"width": 100,
+			"label": _("Invoice"),
+			"fieldname": "invoice",
+			"fieldtype": "Link",
+			"options": "Purchase Invoice",
+			"width": 150,
 		},
 	]
 
@@ -343,6 +398,7 @@ def get_items(filters, additional_table_columns):
 			pii.stock_qty,
 			pii.stock_uom,
 			pii.base_net_amount,
+			pii.batch_no,
 			pi.supplier_name,
 			pi.mode_of_payment,
 		)
@@ -376,7 +432,7 @@ def get_items(filters, additional_table_columns):
 
 
 def get_aii_accounts():
-	return dict(frappe.get_all("Company", fields=["name", "stock_received_but_not_billed"], as_list=True))
+	return dict(frappe.db.sql("select name, stock_received_but_not_billed from tabCompany"))
 
 
 def get_purchase_receipts_against_purchase_order(item_list):
@@ -384,11 +440,16 @@ def get_purchase_receipts_against_purchase_order(item_list):
 	po_item_rows = list(set(d.po_detail for d in item_list))
 
 	if po_item_rows:
-		purchase_receipts = frappe.get_all(
-			"Purchase Receipt Item",
-			filters={"docstatus": 1, "purchase_order_item": ["in", po_item_rows]},
-			fields=["parent", "purchase_order_item"],
-			group_by="purchase_order_item, parent",
+		purchase_receipts = frappe.db.sql(
+			"""
+			select parent, purchase_order_item
+			from `tabPurchase Receipt Item`
+			where docstatus=1 and purchase_order_item in (%s)
+			group by purchase_order_item, parent
+		"""
+			% (", ".join(["%s"] * len(po_item_rows))),
+			tuple(po_item_rows),
+			as_dict=1,
 		)
 
 		for pr in purchase_receipts:

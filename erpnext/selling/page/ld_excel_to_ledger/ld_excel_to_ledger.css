@@ -1,0 +1,34 @@
+.converter-container {
+    background: #f8f9fa;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    margin: 40px auto;
+    max-width: 600px;
+    padding: 60px !important;
+    border: 1px solid #e9ecef;
+}
+
+.converter-container h1 {
+    font-weight: 700;
+    color: #2c3e50;
+    margin-bottom: 30px;
+}
+
+#file-uploader-section {
+    border: 2px dashed #dee2e6;
+    border-radius: 8px;
+    padding: 40px;
+    transition: all 0.3s ease;
+}
+
+#file-uploader-section:hover {
+    border-color: var(--primary-color);
+    background: #fff;
+}
+
+.primary-action {
+    background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+    border: none;
+    padding: 10px 30px;
+    font-weight: 600;
+}

@@ -52,6 +52,69 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
 	customer_details = get_customer_details()
 
 	for d in item_list:
+		import re
+
+		batch_no = d.batch_no
+		size = ""
+		schedule = ""
+		if batch_no:
+			if "MIX" in str(batch_no).upper():
+				size = "MIX"
+				schedule = "MIX"
+			else:
+				od_match = re.search(r"OD\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+				thk_match = re.search(r"THK\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+
+				od = flt(od_match.group(1)) if od_match else None
+				thk = flt(thk_match.group(1)) if thk_match else None
+
+				if od:
+					if thk:
+						pipe_dim = frappe.db.get_value(
+							"Pipe Dimension Master",
+							{"od_mm": od, "thickness_mm": thk},
+							["nb", "schedule"],
+							as_dict=True,
+						)
+						if pipe_dim:
+							size = pipe_dim.nb
+							schedule = pipe_dim.schedule
+
+					if not size:
+						pipe_dim = frappe.db.get_value(
+							"Pipe Dimension Master",
+							{"od_mm": od},
+							["nb", "schedule"],
+							as_dict=True,
+						)
+						if pipe_dim:
+							size = pipe_dim.nb
+							schedule = f"{thk} MM" if thk else None
+
+				if not size:
+					if od:
+						size = f"{od} MM"
+					if thk:
+						schedule = f"{thk} MM"
+
+		# In-memory filtering by size
+		filter_size = filters.get("custom_size")
+		if filter_size:
+			if isinstance(filter_size, str):
+				filter_size = [s.strip() for s in filter_size.split(",") if s.strip()]
+			if isinstance(filter_size, list):
+				if not any(str(s).strip().lower() == str(size).strip().lower() for s in filter_size):
+					continue
+
+		# In-memory filtering by schedule/OD
+		filter_schedule = filters.get("custom_schedule")
+		if filter_schedule:
+			if isinstance(filter_schedule, str):
+				filter_schedule = [s.strip() for s in filter_schedule.split(",") if s.strip()]
+			if isinstance(filter_schedule, list):
+				if not any(str(s).strip().lower() == str(schedule).strip().lower() for s in filter_schedule):
+					continue
+
 		customer_record = customer_details.get(d.customer)
 
 		delivery_note = None
@@ -67,12 +130,15 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
 			"item_code": d.item_code,
 			"item_name": d.si_item_name if d.si_item_name else d.i_item_name,
 			"item_group": d.si_item_group if d.si_item_group else d.i_item_group,
+			"custom_pkt_no": d.custom_pkt_no,
+			"custom_size": size,
+			"custom_schedule": schedule,
 			"description": d.description,
 			"invoice": d.parent,
 			"posting_date": d.posting_date,
 			"customer": d.customer,
-			"customer_name": customer_record.customer_name,
-			"customer_group": customer_record.customer_group,
+			"customer_name": customer_record.customer_name if customer_record else "",
+			"customer_group": customer_record.customer_group if customer_record else "",
 			**get_values_for_columns(additional_table_columns, d),
 			"debit_to": d.debit_to,
 			"mode_of_payment": ", ".join(mode_of_payments.get(d.parent, [])),
@@ -163,58 +229,37 @@ def get_columns(additional_table_columns, filters):
 	if filters.get("group_by") != ("Item"):
 		columns.extend(
 			[
-				{
-					"label": _("Item Code"),
-					"fieldname": "item_code",
-					"fieldtype": "Link",
-					"options": "Item",
-					"width": 120,
-				},
-				{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 120},
-			]
-		)
-
-	if filters.get("group_by") not in ("Item", "Item Group"):
-		columns.extend(
-			[
-				{
-					"label": _("Item Group"),
-					"fieldname": "item_group",
-					"fieldtype": "Link",
-					"options": "Item Group",
-					"width": 120,
-				}
+				{"label": _("Posting Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 120},
+				{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 240},
 			]
 		)
 
 	columns.extend(
 		[
-			{"label": _("Description"), "fieldname": "description", "fieldtype": "Data", "width": 150},
 			{
-				"label": _("Invoice"),
-				"fieldname": "invoice",
-				"fieldtype": "Link",
-				"options": "Sales Invoice",
+				"label": _("Size"),
+				"fieldname": "custom_size",
+				"fieldtype": "Data",
+				"width": 100,
+			},
+			{
+				"label": _("OD/Schedule"),
+				"fieldname": "custom_schedule",
+				"fieldtype": "Data",
+				"width": 100,
+			},
+			{
+				"label": _("PKT/COIL NO./IMP_ID"),
+				"fieldname": "custom_pkt_no",
+				"fieldtype": "Data",
 				"width": 150,
 			},
-			{"label": _("Posting Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 120},
+			{"label": _("Stock Qty"), "fieldname": "stock_qty", "fieldtype": "Float", "width": 100},
 		]
 	)
 
-	if filters.get("group_by") != "Customer":
-		columns.extend(
-			[
-				{
-					"label": _("Customer Group"),
-					"fieldname": "customer_group",
-					"fieldtype": "Link",
-					"options": "Customer Group",
-					"width": 120,
-				}
-			]
-		)
 
-	if filters.get("group_by") not in ("Customer", "Customer Group"):
+	if filters.get("group_by") != "Customer":
 		columns.extend(
 			[
 				{
@@ -222,12 +267,6 @@ def get_columns(additional_table_columns, filters):
 					"fieldname": "customer",
 					"fieldtype": "Link",
 					"options": "Customer",
-					"width": 120,
-				},
-				{
-					"label": _("Customer Name"),
-					"fieldname": "customer_name",
-					"fieldtype": "Data",
 					"width": 120,
 				},
 			]
@@ -245,78 +284,6 @@ def get_columns(additional_table_columns, filters):
 			"width": 80,
 		},
 		{
-			"label": _("Mode Of Payment"),
-			"fieldname": "mode_of_payment",
-			"fieldtype": "Data",
-			"width": 120,
-		},
-	]
-
-	if filters.get("group_by") != "Territory":
-		columns.extend(
-			[
-				{
-					"label": _("Territory"),
-					"fieldname": "territory",
-					"fieldtype": "Link",
-					"options": "Territory",
-					"width": 80,
-				}
-			]
-		)
-
-	columns += [
-		{
-			"label": _("Project"),
-			"fieldname": "project",
-			"fieldtype": "Link",
-			"options": "Project",
-			"width": 80,
-		},
-		{
-			"label": _("Company"),
-			"fieldname": "company",
-			"fieldtype": "Link",
-			"options": "Company",
-			"width": 80,
-		},
-		{
-			"label": _("Sales Order"),
-			"fieldname": "sales_order",
-			"fieldtype": "Link",
-			"options": "Sales Order",
-			"width": 100,
-		},
-		{
-			"label": _("Delivery Note"),
-			"fieldname": "delivery_note",
-			"fieldtype": "Link",
-			"options": "Delivery Note",
-			"width": 100,
-		},
-		{
-			"label": _("Income Account"),
-			"fieldname": "income_account",
-			"fieldtype": "Link",
-			"options": "Account",
-			"width": 100,
-		},
-		{
-			"label": _("Cost Center"),
-			"fieldname": "cost_center",
-			"fieldtype": "Link",
-			"options": "Cost Center",
-			"width": 100,
-		},
-		{"label": _("Stock Qty"), "fieldname": "stock_qty", "fieldtype": "Float", "width": 100},
-		{
-			"label": _("Stock UOM"),
-			"fieldname": "stock_uom",
-			"fieldtype": "Link",
-			"options": "UOM",
-			"width": 100,
-		},
-		{
 			"label": _("Rate"),
 			"fieldname": "rate",
 			"fieldtype": "Float",
@@ -329,6 +296,13 @@ def get_columns(additional_table_columns, filters):
 			"fieldtype": "Currency",
 			"options": "currency",
 			"width": 100,
+		},
+		{
+			"label": _("Invoice"),
+			"fieldname": "invoice",
+			"fieldtype": "Link",
+			"options": "Sales Invoice",
+			"width": 150,
 		},
 	]
 
@@ -461,6 +435,8 @@ def get_items(filters, additional_query_columns, additional_conditions=None):
 			sii.stock_uom,
 			sii.base_net_rate,
 			sii.base_net_amount,
+			sii.batch_no,
+			sii.custom_pkt_no,
 			si.customer_name,
 			fn.IfNull(si.customer_group, "Not Specified").as_("customer_group"),
 			sii.so_detail,

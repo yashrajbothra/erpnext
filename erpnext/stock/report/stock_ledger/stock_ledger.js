@@ -73,6 +73,37 @@ frappe.query_reports["Stock Ledger"] = {
 			options: "Item Group",
 		},
 		{
+			fieldname: "custom_size",
+			label: __("Size"),
+			fieldtype: "MultiSelectList",
+			get_data: async function (txt) {
+				let { message: data } = await frappe.call({
+					method: "erpnext.stock.report.stock_ledger.stock_ledger.get_pipe_size_filter_data",
+					args: { txt: txt || "" }
+				});
+				if (!data) return [];
+				return data;
+			}
+		},
+		{
+			fieldname: "custom_schedule",
+			label: __("OD/Schedule"),
+			fieldtype: "MultiSelectList",
+			get_data: async function (txt) {
+				let { message: data } = await frappe.call({
+					method: "erpnext.stock.report.stock_ledger.stock_ledger.get_pipe_schedule_filter_data",
+					args: { txt: txt || "" }
+				});
+				if (!data) return [];
+				return data;
+			}
+		},
+		{
+			fieldname: "custom_pkt_no",
+			label: __("Packet No"),
+			fieldtype: "Data",
+		},
+		{
 			fieldname: "batch_no",
 			label: __("Batch No"),
 			fieldtype: "Link",
@@ -87,41 +118,10 @@ frappe.query_reports["Stock Ledger"] = {
 			},
 		},
 		{
-			fieldname: "brand",
-			label: __("Brand"),
-			fieldtype: "Link",
-			options: "Brand",
-		},
-		{
-			fieldname: "voucher_no",
-			label: __("Voucher #"),
-			fieldtype: "Data",
-		},
-		{
-			fieldname: "project",
-			label: __("Project"),
-			fieldtype: "Link",
-			options: "Project",
-		},
-		{
-			fieldname: "include_uom",
-			label: __("Include UOM"),
-			fieldtype: "Link",
-			options: "UOM",
-		},
-		{
-			fieldname: "valuation_field_type",
-			label: __("Valuation Field Type"),
-			fieldtype: "Select",
-			width: "80",
-			options: "Currency\nFloat",
-			default: "Currency",
-		},
-		{
 			fieldname: "segregate_serial_batch_bundle",
 			label: __("Enable Serial / Batch Bundle"),
 			fieldtype: "Check",
-			default: 0,
+			default: 1,
 		},
 	],
 	formatter: function (value, row, column, data, default_formatter) {

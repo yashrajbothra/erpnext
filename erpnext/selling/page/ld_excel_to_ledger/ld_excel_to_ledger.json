@@ -1,0 +1,19 @@
+{
+ "content": null,
+ "creation": "2026-04-22 16:22:37.016615",
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "modified": "2026-04-22 16:22:37.016615",
+ "modified_by": "Administrator",
+ "module": "Selling",
+ "name": "ld-excel-to-ledger",
+ "owner": "Administrator",
+ "page_name": "ld-excel-to-ledger",
+ "roles": [],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "LD Excel to Ledger Converter"
+}

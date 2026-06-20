@@ -3,6 +3,7 @@
 
 
 import copy
+from collections import defaultdict
 
 import frappe
 from frappe import _
@@ -20,6 +21,7 @@ from erpnext.stock.utils import (
 
 
 def execute(filters=None):
+	filters = frappe._dict(filters or {})
 	is_reposting_item_valuation_in_progress()
 	include_uom = filters.get("include_uom")
 	columns = get_columns(filters)
@@ -63,80 +65,236 @@ def execute(filters=None):
 
 	available_serial_nos = {}
 
-	batch_balance_dict = frappe._dict({})
-	if actual_qty and filters.get("batch_no"):
-		batch_balance_dict[filters.batch_no] = [actual_qty, stock_value]
+	batch_balances = {}
+	items_list = list(set(sle.item_code for sle in sl_entries))
+	warehouses_list = list(set(sle.warehouse for sle in sl_entries))
+
+	if items_list and warehouses_list:
+		q1_sql = f"""
+			SELECT
+				item_code, warehouse, batch_no,
+				SUM(actual_qty) as qty,
+				SUM(stock_value_difference) as stock_value,
+				SUM(CASE WHEN actual_qty > 0 THEN custom_pieces WHEN actual_qty < 0 THEN -custom_pieces ELSE 0 END) as pieces
+			FROM `tabStock Ledger Entry`
+			WHERE docstatus = 1 AND is_cancelled = 0
+			AND posting_date < %s AND company = %s
+			AND item_code IN ({', '.join(['%s'] * len(items_list))})
+			AND warehouse IN ({', '.join(['%s'] * len(warehouses_list))})
+			GROUP BY item_code, warehouse, batch_no
+		"""
+		for row in frappe.db.sql(q1_sql, [filters.from_date, filters.company] + items_list + warehouses_list, as_dict=True):
+			b_key = (row.item_code, row.warehouse, row.batch_no or "")
+			batch_balances[b_key] = [flt(row.qty), flt(row.stock_value), flt(row.pieces)]
+
+		sle_t = frappe.qb.DocType("Stock Ledger Entry")
+		sbe_t = frappe.qb.DocType("Serial and Batch Entry")
+		q2 = (
+			frappe.qb.from_(sle_t)
+			.inner_join(sbe_t)
+			.on(sle_t.serial_and_batch_bundle == sbe_t.parent)
+			.select(
+				sle_t.item_code,
+				sle_t.warehouse,
+				sbe_t.batch_no,
+				sbe_t.qty,
+				sle_t.actual_qty,
+				sle_t.custom_pieces,
+				sle_t.voucher_type,
+				sbe_t.stock_value_difference.as_("stock_value"),
+			)
+			.where(
+				(sle_t.docstatus == 1)
+				& (sle_t.is_cancelled == 0)
+				& (sle_t.posting_date < filters.from_date)
+				& (sle_t.company == filters.company)
+				& (sle_t.item_code.isin(items_list))
+				& (sle_t.warehouse.isin(warehouses_list))
+			)
+		)
+		for row in q2.run(as_dict=True):
+			b_key = (row.item_code, row.warehouse, row.batch_no or "")
+			if b_key not in batch_balances:
+				batch_balances[b_key] = [0.0, 0.0, 0.0]
+			batch_balances[b_key][0] += flt(row.qty)
+			batch_balances[b_key][1] += flt(row.stock_value)
+
+			# Calculate pieces proportionally for bundle entries
+			pieces = flt(row.custom_pieces) * (flt(row.qty) / flt(row.actual_qty)) if row.actual_qty else 0.0
+			if flt(row.qty) < 0:
+				pieces = -abs(pieces)
+			elif flt(row.qty) > 0:
+				pieces = abs(pieces)
+			else:
+				pieces = 0.0
+			batch_balances[b_key][2] += pieces
+
+	if opening_row and filters.get("batch_no"):
+		for b_key in list(batch_balances.keys()):
+			if b_key[2] == filters.batch_no:
+				batch_balances[b_key] = [flt(opening_row.get("qty_after_transaction")), flt(opening_row.get("stock_value")), flt(opening_row.get("balance_pieces"))]
 
 	inv_dimension_wise_dict = frappe._dict({})
 	set_opening_row_for_inv_dimension(
 		inv_dimension_wise_dict, filters, inv_dimension_key=inv_dimension_key, opening_row=opening_row
 	)
 
-	item_wh_wise_prev_sle = {}
 	for sle in sl_entries:
 		item_detail = item_details[sle.item_code]
 
 		sle.update(item_detail)
 		if bundle_info := bundle_details.get(sle.serial_and_batch_bundle):
-			data.extend(get_segregated_bundle_entries(sle, bundle_info, batch_balance_dict, filters))
+			data.extend(get_segregated_bundle_entries(sle, bundle_info, batch_balances, filters))
 			continue
 
 		if inv_dimension_key:
 			set_balance_value_for_inv_dimesion(inv_dimension_key, inv_dimension_wise_dict, sle)
 
-		if filters.get("batch_no"):
-			actual_qty += flt(sle.actual_qty, precision)
-			stock_value += sle.stock_value_difference
-			if sle.batch_no:
-				if not batch_balance_dict.get(sle.batch_no):
-					batch_balance_dict[sle.batch_no] = [0, 0]
+		b_key = (sle.item_code, sle.warehouse, sle.batch_no or "")
+		if b_key not in batch_balances:
+			batch_balances[b_key] = [0.0, 0.0, 0.0]
 
-				batch_balance_dict[sle.batch_no][0] += sle.actual_qty
-				batch_balance_dict[sle.batch_no][1] += stock_value
+		if sle.voucher_type == "Stock Reconciliation" and not sle.actual_qty:
+			# Zero-target SLE: reset the balance to the new reconciled pieces value
+			batch_balances[b_key][0] = flt(sle.qty_after_transaction)
+			batch_balances[b_key][1] = flt(sle.stock_value)
+			# Do not reset pieces here because custom_pieces is a delta, not absolute
+		else:
+			pieces_diff = flt(sle.custom_pieces)
+			if sle.actual_qty < 0:
+				pieces_diff = -abs(pieces_diff)
+			elif sle.actual_qty > 0:
+				pieces_diff = abs(pieces_diff)
+			else:
+				pieces_diff = 0.0
 
-			if filters.get("segregate_serial_batch_bundle"):
-				actual_qty = batch_balance_dict[sle.batch_no][0]
+			batch_balances[b_key][0] += flt(sle.actual_qty, precision)
+			batch_balances[b_key][1] += flt(sle.stock_value_difference)
+			batch_balances[b_key][2] += pieces_diff
 
-			if sle.voucher_type == "Stock Reconciliation" and not sle.actual_qty:
-				actual_qty = sle.qty_after_transaction
-				stock_value = sle.stock_value
+		sle.update({"qty_after_transaction": batch_balances[b_key][0], "stock_value": batch_balances[b_key][1], "balance_pieces": batch_balances[b_key][2]})
 
-			sle.update({"qty_after_transaction": actual_qty, "stock_value": stock_value})
+		# For all voucher types including Stock Reconciliation: use actual_qty direction to determine in/out display
+		in_pieces = flt(sle.custom_pieces) if sle.actual_qty > 0 else 0.0
+		out_pieces = -abs(flt(sle.custom_pieces)) if sle.actual_qty < 0 else 0.0
 
-		sle.update({"in_qty": max(sle.actual_qty, 0), "out_qty": min(sle.actual_qty, 0)})
+		sle.update({
+			"in_qty": max(sle.actual_qty, 0), "out_qty": min(sle.actual_qty, 0),
+			"in_pieces": in_pieces, "out_pieces": out_pieces
+		})
 
 		if sle.serial_no:
 			update_available_serial_nos(available_serial_nos, sle)
 
-		if sle.actual_qty < 0:
+		if sle.actual_qty:
 			sle["in_out_rate"] = flt(sle.stock_value_difference / sle.actual_qty, precision)
-			sle["incoming_rate"] = 0
 
-		elif sle.voucher_type == "Stock Reconciliation" and sle.actual_qty < 0:
+		elif sle.voucher_type == "Stock Reconciliation":
 			sle["in_out_rate"] = sle.valuation_rate
 
-		if (
-			sle.voucher_type == "Stock Reconciliation"
-			and not sle.in_qty
-			and not sle.out_qty
-			and not sle.actual_qty
-		):
-			if prev_sle := item_wh_wise_prev_sle.get((sle.item_code, sle.warehouse)):
-				bal_qty = prev_sle.get("qty_after_transaction", 0)
-				qty = sle.qty_after_transaction - bal_qty
-				if qty > 0:
-					sle.in_qty = qty
-				elif qty < 0:
-					sle.out_qty = qty
-
-		item_wh_wise_prev_sle[(sle.item_code, sle.warehouse)] = sle
 		data.append(sle)
 
 		if include_uom:
 			conversion_factors.append(item_detail.conversion_factor)
 
+	filtered_data = []
+	filtered_conversion_factors = []
+	import re
+
+	for idx, row in enumerate(data):
+		item_code = row.get("item_code")
+		if item_code == _("'Opening'"):
+			if filters.get("item_code"):
+				if isinstance(filters.item_code, list | tuple):
+					item_code = filters.item_code[0] if filters.item_code else None
+				else:
+					item_code = filters.item_code
+
+		batch_no = row.get("batch_no")
+		
+		if cint(filters.get("segregate_serial_batch_bundle")) and not batch_no and item_code and item_code != _("'Opening'"):
+			continue
+
+		if not batch_no and item_code and item_code != _("'Opening'"):
+			if not row.get("serial_and_batch_bundle"):
+				batch_no = frappe.db.get_value("Batch", {"item": item_code}, "name", order_by="creation desc")
+			elif filters.get("batch_no"):
+				batch_no = filters.batch_no
+				
+		if not batch_no:
+			continue
+
+		size = ""
+		schedule = ""
+		if batch_no:
+			if "MIX" in str(batch_no).upper():
+				size = "MIX"
+				schedule = "MIX"
+			else:
+				od_match = re.search(r"OD\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+				thk_match = re.search(r"THK\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+
+				od = flt(od_match.group(1)) if od_match else None
+				thk = flt(thk_match.group(1)) if thk_match else None
+
+				if od:
+					if thk:
+						pipe_dim = frappe.db.get_value(
+							"Pipe Dimension Master",
+							{"od_mm": od, "thickness_mm": thk},
+							["nb", "schedule"],
+							as_dict=True,
+						)
+						if pipe_dim:
+							size = pipe_dim.nb
+							schedule = pipe_dim.schedule
+
+					if not size:
+						pipe_dim = frappe.db.get_value(
+							"Pipe Dimension Master",
+							{"od_mm": od},
+							["nb", "schedule"],
+							as_dict=True,
+						)
+						if pipe_dim:
+							size = pipe_dim.nb
+							schedule = f"{thk} MM" if thk else None
+
+				if not size:
+					if od:
+						size = f"{od} MM"
+					if thk:
+						schedule = f"{thk} MM"
+
+		row["custom_size"] = size
+		row["custom_schedule"] = schedule
+
+		filter_size = filters.get("custom_size")
+		if filter_size:
+			if isinstance(filter_size, str):
+				filter_size = [s.strip() for s in filter_size.split(",") if s.strip()]
+			if isinstance(filter_size, list):
+				if not any(str(s).strip().lower() == str(row.get("custom_size", "")).strip().lower() for s in filter_size):
+					continue
+
+		filter_schedule = filters.get("custom_schedule")
+		if filter_schedule:
+			if isinstance(filter_schedule, str):
+				filter_schedule = [s.strip() for s in filter_schedule.split(",") if s.strip()]
+			if isinstance(filter_schedule, list):
+				if not any(str(s).strip().lower() == str(row.get("custom_schedule", "")).strip().lower() for s in filter_schedule):
+					continue
+
+		filtered_data.append(row)
+		if conversion_factors and idx < len(conversion_factors):
+			filtered_conversion_factors.append(conversion_factors[idx])
+
+	data = filtered_data
+	conversion_factors = filtered_conversion_factors
+
 	update_included_uom_in_report(columns, data, include_uom, conversion_factors)
 	return columns, data
+
 
 
 def set_opening_row_for_inv_dimension(
@@ -183,7 +341,7 @@ def set_balance_value_for_inv_dimesion(inv_dimension_key, inv_dimension_wise_dic
 	)
 
 
-def get_segregated_bundle_entries(sle, bundle_details, batch_balance_dict, filters):
+def get_segregated_bundle_entries(sle, bundle_details, batch_balances, filters):
 	segregated_entries = []
 	qty_before_transaction = sle.qty_after_transaction - sle.actual_qty
 	stock_value_before_transaction = sle.stock_value - sle.stock_value_difference
@@ -191,30 +349,39 @@ def get_segregated_bundle_entries(sle, bundle_details, batch_balance_dict, filte
 	for row in bundle_details:
 		new_sle = copy.deepcopy(sle)
 		new_sle.update(row)
+
+		b_key = (new_sle.item_code, new_sle.warehouse, row.batch_no or "")
+		if b_key not in batch_balances:
+			batch_balances[b_key] = [0.0, 0.0, 0.0]
+
+		row_pieces = flt(sle.custom_pieces) * (flt(row.qty) / flt(sle.actual_qty)) if sle.actual_qty else 0.0
+		if row.qty < 0:
+			row_pieces = -abs(row_pieces)
+		elif row.qty > 0:
+			row_pieces = abs(row_pieces)
+		else:
+			row_pieces = 0.0
+
+		batch_balances[b_key][0] += flt(row.qty)
+		batch_balances[b_key][1] += flt(new_sle.stock_value_difference)
+		batch_balances[b_key][2] += row_pieces
+
+		in_pieces = row_pieces if row.qty > 0 else 0.0
+		out_pieces = -abs(row_pieces) if row.qty < 0 else 0.0
+
 		new_sle.update(
 			{
-				"in_out_rate": flt(new_sle.stock_value_difference / row.qty) if row.qty < 0 else 0,
+				"in_out_rate": flt(new_sle.stock_value_difference / row.qty) if row.qty else 0,
 				"in_qty": row.qty if row.qty > 0 else 0,
 				"out_qty": row.qty if row.qty < 0 else 0,
-				"qty_after_transaction": qty_before_transaction + row.qty,
-				"stock_value": stock_value_before_transaction + new_sle.stock_value_difference,
+				"qty_after_transaction": batch_balances[b_key][0],
+				"stock_value": batch_balances[b_key][1],
+				"balance_pieces": batch_balances[b_key][2],
+				"in_pieces": in_pieces,
+				"out_pieces": out_pieces,
 				"incoming_rate": row.incoming_rate if row.qty > 0 else 0,
 			}
 		)
-
-		if filters.get("batch_no") and row.batch_no:
-			if not batch_balance_dict.get(row.batch_no):
-				batch_balance_dict[row.batch_no] = [0, 0]
-
-			batch_balance_dict[row.batch_no][0] += row.qty
-			batch_balance_dict[row.batch_no][1] += row.stock_value_difference
-
-			new_sle.update(
-				{
-					"qty_after_transaction": batch_balance_dict[row.batch_no][0],
-					"stock_value": batch_balance_dict[row.batch_no][1],
-				}
-			)
 
 		qty_before_transaction += row.qty
 		stock_value_before_transaction += new_sle.stock_value_difference
@@ -282,22 +449,7 @@ def update_available_serial_nos(available_serial_nos, sle):
 
 def get_columns(filters):
 	columns = [
-		{"label": _("Date"), "fieldname": "date", "fieldtype": "Datetime", "width": 150},
-		{
-			"label": _("Item"),
-			"fieldname": "item_code",
-			"fieldtype": "Link",
-			"options": "Item",
-			"width": 100,
-		},
-		{"label": _("Item Name"), "fieldname": "item_name", "width": 100},
-		{
-			"label": _("Stock UOM"),
-			"fieldname": "stock_uom",
-			"fieldtype": "Link",
-			"options": "UOM",
-			"width": 90,
-		},
+		{"label": _("Date"), "fieldname": "date", "fieldtype": "Datetime", "width": 130},
 	]
 
 	for dimension in get_inventory_dimensions():
@@ -313,6 +465,49 @@ def get_columns(filters):
 
 	columns.extend(
 		[
+			{
+				"label": _("Citi No."),
+				"fieldname": "custom_citi_no",
+				"fieldtype": "Data",
+				"width": 100,
+			},
+			{
+				"label": _("Size"),
+				"fieldname": "custom_size",
+				"fieldtype": "Data",
+				"width": 100,
+			},
+			{
+				"label": _("OD/Schedule"),
+				"fieldname": "custom_schedule",
+				"fieldtype": "Data",
+				"width": 100,
+			},
+			{
+				"label": _("In Pieces"),
+				"fieldname": "in_pieces",
+				"fieldtype": "Float",
+				"width": 80,
+			},
+			{
+				"label": _("Out Pieces"),
+				"fieldname": "out_pieces",
+				"fieldtype": "Float",
+				"width": 80,
+			},
+			{
+				"label": _("Balance Pieces"),
+				"fieldname": "balance_pieces",
+				"fieldtype": "Float",
+				"width": 100,
+			},
+			{
+				"label": _("Warehouse"),
+				"fieldname": "warehouse",
+				"fieldtype": "Link",
+				"options": "Warehouse",
+				"width": 150,
+			},
 			{
 				"label": _("In Qty"),
 				"fieldname": "in_qty",
@@ -334,56 +529,29 @@ def get_columns(filters):
 				"width": 100,
 				"convertible": "qty",
 			},
+			{"label": _("Voucher Type"), "fieldname": "voucher_type", "width": 110},
 			{
-				"label": _("Warehouse"),
-				"fieldname": "warehouse",
-				"fieldtype": "Link",
-				"options": "Warehouse",
-				"width": 150,
-			},
-			{
-				"label": _("Item Group"),
-				"fieldname": "item_group",
-				"fieldtype": "Link",
-				"options": "Item Group",
+				"label": _("Voucher #"),
+				"fieldname": "voucher_no",
+				"fieldtype": "Dynamic Link",
+				"options": "voucher_type",
 				"width": 100,
 			},
-			{
-				"label": _("Brand"),
-				"fieldname": "brand",
+				{
+				"label": _("Batch"),
+				"fieldname": "batch_no",
 				"fieldtype": "Link",
-				"options": "Brand",
-				"width": 100,
-			},
-			{"label": _("Description"), "fieldname": "description", "width": 200},
-			{
-				"label": _("Incoming Rate"),
-				"fieldname": "incoming_rate",
-				"fieldtype": "Currency",
-				"width": 110,
-				"options": "Company:company:default_currency",
-				"convertible": "rate",
+				"options": "Batch",
+				"width": 300,
+				"hidden": not filters.get("segregate_serial_batch_bundle"),
 			},
 			{
-				"label": _("Avg Rate (Balance Stock)"),
-				"fieldname": "valuation_rate",
-				"fieldtype": filters.valuation_field_type,
-				"width": 180,
-				"options": "Company:company:default_currency"
-				if filters.valuation_field_type == "Currency"
-				else None,
-				"convertible": "rate",
-			},
-			{
-				"label": _("Outgoing Rate"),
-				"fieldname": "in_out_rate",
-				"fieldtype": filters.valuation_field_type,
-				"width": 140,
-				"options": "Company:company:default_currency"
-				if filters.valuation_field_type == "Currency"
-				else None,
-				"convertible": "rate",
-			},
+			"label": _("Item"),
+			"fieldname": "item_code",
+			"fieldtype": "Link",
+			"options": "Item",
+			"width": 100,
+		},
 			{
 				"label": _("Balance Value"),
 				"fieldname": "stock_value",
@@ -397,38 +565,6 @@ def get_columns(filters):
 				"fieldtype": "Currency",
 				"width": 110,
 				"options": "Company:company:default_currency",
-			},
-			{"label": _("Voucher Type"), "fieldname": "voucher_type", "width": 110},
-			{
-				"label": _("Voucher #"),
-				"fieldname": "voucher_no",
-				"fieldtype": "Dynamic Link",
-				"options": "voucher_type",
-				"width": 100,
-			},
-			{
-				"label": _("Serial and Batch Bundle"),
-				"fieldname": "serial_and_batch_bundle",
-				"fieldtype": "Link",
-				"options": "Serial and Batch Bundle",
-				"width": 150,
-				"hidden": not filters.get("segregate_serial_batch_bundle"),
-			},
-			{
-				"label": _("Batch"),
-				"fieldname": "batch_no",
-				"fieldtype": "Link",
-				"options": "Batch",
-				"width": 100,
-				"hidden": not filters.get("segregate_serial_batch_bundle"),
-			},
-			{
-				"label": _("Serial No"),
-				"fieldname": "serial_no",
-				"fieldtype": "Link",
-				"options": "Serial No",
-				"width": 100,
-				"hidden": not filters.get("segregate_serial_batch_bundle"),
 			},
 			{
 				"label": _("Project"),
@@ -444,6 +580,14 @@ def get_columns(filters):
 				"options": "Company",
 				"width": 110,
 			},
+		{"label": _("Item Name"), "fieldname": "item_name", "width": 100},
+		{
+			"label": _("Stock UOM"),
+			"fieldname": "stock_uom",
+			"fieldtype": "Link",
+			"options": "UOM",
+			"width": 90,
+		},
 		]
 	)
 
@@ -475,7 +619,8 @@ def get_stock_ledger_entries(filters, items):
 			sle.stock_value,
 			sle.batch_no,
 			sle.serial_no,
-			sle.project,
+			sle.custom_pieces,
+			sle.custom_citi_no,
 		)
 		.where((sle.docstatus < 2) & (sle.is_cancelled == 0) & (sle.posting_datetime[from_date:to_date]))
 		.orderby(sle.posting_datetime)
@@ -615,28 +760,31 @@ def get_sle_conditions(filters):
 
 
 def get_opening_balance_from_batch(filters, columns, sl_entries):
-	query_filters = {
-		"batch_no": filters.batch_no,
-		"docstatus": 1,
-		"is_cancelled": 0,
-		"posting_date": ("<", filters.from_date),
-		"company": filters.company,
-	}
+	conditions = []
+	values = []
+	for field in ["item_code", "warehouse"]:
+		if value := filters.get(field):
+			if isinstance(value, list | tuple):
+				conditions.append(f"{field} IN ({', '.join(['%s'] * len(value))})")
+				values.extend(value)
+			else:
+				conditions.append(f"{field} = %s")
+				values.append(value)
 
-	for fields in ["item_code", "warehouse"]:
-		if value := filters.get(fields):
-			query_filters[fields] = ("in", value)
+	condition_str = f"AND {' AND '.join(conditions)}" if conditions else ""
 
-	opening_data = frappe.get_all(
-		"Stock Ledger Entry",
-		fields=[
-			{"SUM": "actual_qty", "as": "qty_after_transaction"},
-			{"SUM": "stock_value_difference", "as": "stock_value"},
-		],
-		filters=query_filters,
-	)[0]
+	opening_data = frappe.db.sql(f"""
+		SELECT 
+			SUM(actual_qty) as qty_after_transaction,
+			SUM(stock_value_difference) as stock_value,
+			SUM(CASE WHEN actual_qty > 0 THEN custom_pieces WHEN actual_qty < 0 THEN -custom_pieces ELSE 0 END) as balance_pieces
+		FROM `tabStock Ledger Entry`
+		WHERE batch_no = %s AND docstatus = 1 AND is_cancelled = 0
+		AND posting_date < %s AND company = %s
+		{condition_str}
+	""", [filters.batch_no, filters.from_date, filters.company] + values, as_dict=True)[0]
 
-	for field in ["qty_after_transaction", "stock_value", "valuation_rate"]:
+	for field in ["qty_after_transaction", "stock_value", "valuation_rate", "balance_pieces"]:
 		if opening_data.get(field) is None:
 			opening_data[field] = 0.0
 
@@ -647,8 +795,10 @@ def get_opening_balance_from_batch(filters, columns, sl_entries):
 		.inner_join(sabb_table)
 		.on(table.serial_and_batch_bundle == sabb_table.parent)
 		.select(
-			Sum(sabb_table.qty).as_("qty"),
-			Sum(sabb_table.stock_value_difference).as_("stock_value"),
+			sabb_table.qty,
+			table.actual_qty,
+			table.custom_pieces,
+			sabb_table.stock_value_difference.as_("stock_value"),
 		)
 		.where(
 			(sabb_table.batch_no == filters.batch_no)
@@ -673,8 +823,20 @@ def get_opening_balance_from_batch(filters, columns, sl_entries):
 	bundle_data = query.run(as_dict=True)
 
 	if bundle_data:
-		opening_data.qty_after_transaction += flt(bundle_data[0].qty)
-		opening_data.stock_value += flt(bundle_data[0].stock_value)
+		for row in bundle_data:
+			opening_data.qty_after_transaction += flt(row.qty)
+			opening_data.stock_value += flt(row.stock_value)
+
+			# Calculate pieces proportionally
+			pieces = flt(row.custom_pieces) * (flt(row.qty) / flt(row.actual_qty)) if row.actual_qty else 0.0
+			if flt(row.qty) < 0:
+				pieces = -abs(pieces)
+			elif flt(row.qty) > 0:
+				pieces = abs(pieces)
+			else:
+				pieces = 0.0
+			opening_data.balance_pieces += pieces
+
 		if opening_data.qty_after_transaction:
 			opening_data.valuation_rate = flt(opening_data.stock_value) / flt(
 				opening_data.qty_after_transaction
@@ -685,6 +847,8 @@ def get_opening_balance_from_batch(filters, columns, sl_entries):
 		"qty_after_transaction": opening_data.qty_after_transaction,
 		"valuation_rate": opening_data.valuation_rate,
 		"stock_value": opening_data.stock_value,
+		"balance_pieces": opening_data.balance_pieces,
+		"batch_no": filters.get("batch_no"),
 	}
 
 
@@ -726,6 +890,7 @@ def get_opening_balance(filters, columns, sl_entries, inv_dimension_wise_value=N
 		"qty_after_transaction": last_entry.get("qty_after_transaction", 0),
 		"valuation_rate": last_entry.get("valuation_rate", 0),
 		"stock_value": last_entry.get("stock_value", 0),
+		"balance_pieces": last_entry.get("custom_pieces", 0),
 	}
 
 	return row
@@ -852,3 +1017,142 @@ def get_inv_dimension_wise_value(filters) -> list:
 		inv_dimension_key["project"] = filters.get("project")
 
 	return inv_dimension_key
+
+
+@frappe.whitelist()
+def get_pipe_size_filter_data(txt=None):
+	"""Return unique 'size' (NB) values computed from batch_no, for use in filter dropdown.
+	Includes fallback values like '19.05 MM' that are not in Pipe Dimension Master."""
+	import re
+
+	# Get all distinct batch_no values from SLE that have OD or MIX info
+	batch_nos = frappe.db.sql(
+		"SELECT DISTINCT batch_no FROM `tabStock Ledger Entry` WHERE (batch_no LIKE %s OR batch_no LIKE %s) AND docstatus < 2 AND is_cancelled = 0 LIMIT 500",
+		["%OD%", "%MIX%"],
+		as_dict=False,
+	)
+
+	sizes = set()
+	for (batch_no,) in batch_nos:
+		if not batch_no:
+			continue
+		if "MIX" in str(batch_no).upper():
+			size = "MIX"
+		else:
+			od_match = re.search(r"OD\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+			thk_match = re.search(r"THK\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+			od = frappe.utils.flt(od_match.group(1)) if od_match else None
+			thk = frappe.utils.flt(thk_match.group(1)) if thk_match else None
+
+			size = ""
+			if od:
+				if thk:
+					pipe_dim = frappe.db.get_value(
+						"Pipe Dimension Master",
+						{"od_mm": od, "thickness_mm": thk},
+						["nb", "schedule"],
+						as_dict=True,
+					)
+					if pipe_dim:
+						size = pipe_dim.nb
+
+				if not size:
+					pipe_dim = frappe.db.get_value(
+						"Pipe Dimension Master",
+						{"od_mm": od},
+						["nb", "schedule"],
+						as_dict=True,
+					)
+					if pipe_dim:
+						size = pipe_dim.nb
+
+				if not size:
+					size = f"{od} MM"
+
+		if size:
+			sizes.add(size)
+
+	# Also include values from Pipe Dimension Master for items that do have a match
+	pdm_nbs = frappe.db.sql(
+		"SELECT DISTINCT nb FROM `tabPipe Dimension Master` WHERE nb IS NOT NULL AND nb != ''",
+		as_dict=False,
+	)
+	for (nb,) in pdm_nbs:
+		if nb:
+			sizes.add(nb)
+
+	all_sizes = sorted(sizes)
+	if txt:
+		txt_lower = txt.lower()
+		all_sizes = [s for s in all_sizes if txt_lower in s.lower()]
+
+	return [{"value": s, "description": s} for s in all_sizes[:50]]
+
+
+@frappe.whitelist()
+def get_pipe_schedule_filter_data(txt=None):
+	"""Return unique 'schedule' (OD/Schedule) values computed from batch_no, for use in filter dropdown.
+	Includes fallback values like '19.05 MM' that are not in Pipe Dimension Master."""
+	import re
+
+	batch_nos = frappe.db.sql(
+		"SELECT DISTINCT batch_no FROM `tabStock Ledger Entry` WHERE (batch_no LIKE %s OR batch_no LIKE %s) AND docstatus < 2 AND is_cancelled = 0 LIMIT 500",
+		["%THK%", "%MIX%"],
+		as_dict=False,
+	)
+
+	schedules = set()
+	for (batch_no,) in batch_nos:
+		if not batch_no:
+			continue
+		if "MIX" in str(batch_no).upper():
+			schedule = "MIX"
+		else:
+			od_match = re.search(r"OD\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+			thk_match = re.search(r"THK\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
+			od = frappe.utils.flt(od_match.group(1)) if od_match else None
+			thk = frappe.utils.flt(thk_match.group(1)) if thk_match else None
+
+			schedule = ""
+			if od:
+				if thk:
+					pipe_dim = frappe.db.get_value(
+						"Pipe Dimension Master",
+						{"od_mm": od, "thickness_mm": thk},
+						["nb", "schedule"],
+						as_dict=True,
+					)
+					if pipe_dim:
+						schedule = pipe_dim.schedule
+
+				if not schedule:
+					pipe_dim = frappe.db.get_value(
+						"Pipe Dimension Master",
+						{"od_mm": od},
+						["nb", "schedule"],
+						as_dict=True,
+					)
+					if pipe_dim:
+						schedule = f"{thk} MM" if thk else ""
+
+			if not schedule and thk:
+				schedule = f"{thk} MM"
+
+		if schedule:
+			schedules.add(schedule)
+
+	# Also include values from Pipe Dimension Master
+	pdm_schedules = frappe.db.sql(
+		"SELECT DISTINCT schedule FROM `tabPipe Dimension Master` WHERE schedule IS NOT NULL AND schedule != ''",
+		as_dict=False,
+	)
+	for (sched,) in pdm_schedules:
+		if sched:
+			schedules.add(sched)
+
+	all_schedules = sorted(schedules)
+	if txt:
+		txt_lower = txt.lower()
+		all_schedules = [s for s in all_schedules if txt_lower in s.lower()]
+
+	return [{"value": s, "description": s} for s in all_schedules[:50]]

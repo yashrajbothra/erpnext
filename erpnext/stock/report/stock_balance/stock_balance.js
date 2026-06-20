@@ -16,7 +16,6 @@ frappe.query_reports["Stock Balance"] = {
 			label: __("From Date"),
 			fieldtype: "Date",
 			width: "80",
-			reqd: 1,
 			default: frappe.datetime.add_months(frappe.datetime.get_today(), -1),
 		},
 		{
@@ -97,6 +96,69 @@ frappe.query_reports["Stock Balance"] = {
 			options: "Warehouse Type",
 		},
 		{
+			fieldname: "custom_size",
+			label: __("Size"),
+			fieldtype: "MultiSelectList",
+			width: "80",
+			get_data: async function (txt) {
+				let { message: data } = await frappe.call({
+					method: "frappe.client.get_list",
+					args: {
+						doctype: "Pipe Dimension Master",
+						fields: ["nb"],
+						distinct: 1,
+						filters: txt ? [["nb", "like", `%${txt}%`]] : [],
+						limit: 50
+					}
+				});
+				if (!data) return [];
+				let unique = [...new Set(data.map(d => d.nb).filter(Boolean))];
+				return unique.map(v => ({ value: v, description: v }));
+			}
+		},
+		{
+			fieldname: "custom_schedule",
+			label: __("OD/Schedule"),
+			fieldtype: "MultiSelectList",
+			width: "80",
+			get_data: async function (txt) {
+				let { message: data } = await frappe.call({
+					method: "frappe.client.get_list",
+					args: {
+						doctype: "Pipe Dimension Master",
+						fields: ["schedule"],
+						distinct: 1,
+						filters: txt ? [["schedule", "like", `%${txt}%`]] : [],
+						limit: 50
+					}
+				});
+				if (!data) return [];
+				let unique = [...new Set(data.map(d => d.schedule).filter(Boolean))];
+				return unique.map(v => ({ value: v, description: v }));
+			}
+		},
+		{
+			fieldname: "batch_no",
+			label: __("Batch No"),
+			fieldtype: "Link",
+			width: "80",
+			options: "Batch",
+			on_change() {
+				const batch_no = frappe.query_report.get_filter_value("batch_no");
+				if (batch_no) {
+					frappe.query_report.set_filter_value("segregate_serial_batch_bundle", 1);
+				} else {
+					frappe.query_report.set_filter_value("segregate_serial_batch_bundle", 0);
+				}
+			},
+		},
+		{
+			fieldname: "segregate_serial_batch_bundle",
+			label: __("Enable Serial / Batch Bundle"),
+			fieldtype: "Check",
+			default: 0,
+		},
+		{
 			fieldname: "valuation_field_type",
 			label: __("Valuation Field Type"),
 			fieldtype: "Select",
@@ -109,12 +171,6 @@ frappe.query_reports["Stock Balance"] = {
 			label: __("Include UOM"),
 			fieldtype: "Link",
 			options: "UOM",
-		},
-		{
-			fieldname: "show_alt_uom_balance",
-			label: __("Show Alternate UOM Balance"),
-			fieldtype: "Check",
-			default: 0,
 		},
 		{
 			fieldname: "show_variant_attributes",
