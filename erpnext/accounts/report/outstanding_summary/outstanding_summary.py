@@ -35,10 +35,16 @@ def execute(filters=None):
 def get_columns():
     return [
         {
+            "label": _("Party Type"),
+            "fieldname": "party_type",
+            "fieldtype": "Data",
+            "width": 100,
+        },
+        {
             "label": _("Party"),
             "fieldname": "party",
-            "fieldtype": "Link",
-            "options": "Customer",
+            "fieldtype": "Dynamic Link",
+            "options": "party_type",
             "width": 160,
         },
         {
@@ -122,17 +128,14 @@ def get_data(filters):
     )
 
     # ------------------------------------------------------------------
-    # 1. Identify the Debtors (Receivable) accounts for this company
-    # ------------------------------------------------------------------
+    # 1. Identify the Debtors (Receivable) and Creditors (Payable) accounts for this company
     debtor_accounts = frappe.get_all(
         "Account",
-        filters={"account_type": "Receivable", "company": company, "disabled": 0},
+        filters={"account_type": ["in", ["Receivable", "Payable"]], "company": company, "disabled": 0},
         pluck="name",
     )
 
-    # ------------------------------------------------------------------
     # 2. Identify the Debtors Discount accounts for this company
-    # ------------------------------------------------------------------
     discount_accounts = frappe.get_all(
         "Account",
         filters={
@@ -145,14 +148,12 @@ def get_data(filters):
 
     if not debtor_accounts:
         frappe.msgprint(
-            _("No Receivable accounts found for company {0}").format(company),
+            _("No Receivable or Payable accounts found for company {0}").format(company),
             alert=True,
         )
         return []
 
-    # ------------------------------------------------------------------
     # 3. Fetch GL Entries for both account sets in a single query
-    # ------------------------------------------------------------------
     gle = frappe.qb.DocType("GL Entry")
 
     base_query = (
@@ -191,15 +192,12 @@ def get_data(filters):
             return []
         base_query = base_query.where(gle.voucher_no.isin(list(set(party_vouchers))))
 
-
     gl_entries = base_query.run(as_dict=True)
 
     if not gl_entries:
         return []
 
-    # ------------------------------------------------------------------
     # Resolve missing party details from other GL Entries in the same voucher
-    # ------------------------------------------------------------------
     vp_map = {}
     for e in gl_entries:
         if e.party:
@@ -236,9 +234,7 @@ def get_data(filters):
                 e.party_type = vp_map[e.voucher_no]["party_type"]
                 e.party = vp_map[e.voucher_no]["party"]
 
-    # ------------------------------------------------------------------
     # 4. Aggregate per party
-    # ------------------------------------------------------------------
     debtor_set = set(debtor_accounts)
     discount_set = set(discount_accounts) if discount_accounts else set()
     party_map = {}
@@ -248,12 +244,13 @@ def get_data(filters):
         if not party:
             continue
 
-        # Skip non-Customer parties unless no party_type filter
-        if gle_row.party_type and gle_row.party_type != "Customer":
+        # Skip non-Customer/Supplier parties unless no party_type filter
+        if gle_row.party_type and gle_row.party_type not in ("Customer", "Supplier"):
             continue
 
         if party not in party_map:
             party_map[party] = frappe._dict(
+                party_type=gle_row.party_type,
                 party=party,
                 invoice_debtors_debit=0.0,
                 invoice_debtors_credit=0.0,
@@ -270,7 +267,7 @@ def get_data(filters):
         credit = flt(gle_row.credit)
         account = gle_row.account
 
-        if gle_row.voucher_type == "Sales Invoice":
+        if gle_row.voucher_type in ("Sales Invoice", "Purchase Invoice"):
             if account in debtor_set:
                 party_map[party].invoice_debtors_debit += debit
                 party_map[party].invoice_debtors_credit += credit
@@ -288,9 +285,7 @@ def get_data(filters):
     if not party_map:
         return []
 
-    # ------------------------------------------------------------------
     # 5. Optionally filter by customer_group / territory
-    # ------------------------------------------------------------------
     if filters.get("customer_group") or filters.get("territory"):
         cust_filters = {}
         if filters.get("customer_group"):
@@ -309,23 +304,29 @@ def get_data(filters):
     if not party_map:
         return []
 
-    # ------------------------------------------------------------------
-    # 6. Fetch customer names
-    # ------------------------------------------------------------------
+    # 6. Fetch customer and supplier names
+    parties_list = list(party_map.keys())
     customer_names = frappe._dict(
         frappe.get_all(
             "Customer",
-            filters={"name": ["in", list(party_map.keys())]},
+            filters={"name": ["in", parties_list]},
             fields=["name", "customer_name"],
             as_list=1,
         )
     )
+    supplier_names = frappe._dict(
+        frappe.get_all(
+            "Supplier",
+            filters={"name": ["in", parties_list]},
+            fields=["name", "supplier_name"],
+            as_list=1,
+        )
+    )
 
-    # ------------------------------------------------------------------
     # 7. Build final rows — only show parties with non-zero outstanding
-    # ------------------------------------------------------------------
     data = []
     grand = frappe._dict(
+        party_type="",
         party="Grand Total",
         party_name="",
         out_bill=0.0,
@@ -354,8 +355,9 @@ def get_data(filters):
 
         data.append(
             frappe._dict(
+                party_type=row.party_type,
                 party=party,
-                party_name=customer_names.get(party, party),
+                party_name=customer_names.get(party) or supplier_names.get(party) or party,
                 out_bill=out_bill,
                 out_discount=out_discount,
                 paid_bill=paid_bill,

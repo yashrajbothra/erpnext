@@ -61,10 +61,16 @@ def get_columns():
             "width": 160,
         },
         {
+            "label": _("Party Type"),
+            "fieldname": "party_type",
+            "fieldtype": "Data",
+            "width": 100,
+        },
+        {
             "label": _("Party"),
             "fieldname": "party",
-            "fieldtype": "Link",
-            "options": "Customer",
+            "fieldtype": "Dynamic Link",
+            "options": "party_type",
             "width": 130,
         },
         {
@@ -147,10 +153,10 @@ def get_data(filters):
         else frappe.db.get_default("currency")
     )
 
-    # 1. Identify the Debtors (Receivable) accounts for this company
+    # 1. Identify the Debtors (Receivable) and Creditors (Payable) accounts for this company
     debtor_accounts = frappe.get_all(
         "Account",
-        filters={"account_type": "Receivable", "company": company, "disabled": 0},
+        filters={"account_type": ["in", ["Receivable", "Payable"]], "company": company, "disabled": 0},
         pluck="name",
     )
 
@@ -167,7 +173,7 @@ def get_data(filters):
 
     if not debtor_accounts:
         frappe.msgprint(
-            _("No Receivable accounts found for company {0}").format(company),
+            _("No Receivable or Payable accounts found for company {0}").format(company),
             alert=True,
         )
         return []
@@ -251,8 +257,8 @@ def get_data(filters):
         if not party:
             continue
 
-        # Skip non-Customer parties unless no party_type filter
-        if gle_row.party_type and gle_row.party_type != "Customer":
+        # Skip non-Customer/Supplier parties unless no party_type filter
+        if gle_row.party_type and gle_row.party_type not in ("Customer", "Supplier"):
             continue
 
         voucher_no = gle_row.voucher_no
@@ -262,6 +268,7 @@ def get_data(filters):
         key = (party, voucher_no)
         if key not in group_map:
             group_map[key] = frappe._dict(
+                party_type=gle_row.party_type,
                 party=party,
                 voucher_no=voucher_no,
                 voucher_type=gle_row.voucher_type,
@@ -286,7 +293,7 @@ def get_data(filters):
         if gle_row.posting_date:
             row.posting_date = gle_row.posting_date
 
-        if gle_row.voucher_type == "Sales Invoice":
+        if gle_row.voucher_type in ("Sales Invoice", "Purchase Invoice"):
             if account in debtor_set:
                 row.invoice_debtors_debit += debit
                 row.invoice_debtors_credit += credit
@@ -323,12 +330,21 @@ def get_data(filters):
     if not group_map:
         return []
 
-    # 6. Fetch customer names
+    # 6. Fetch customer and supplier names
+    parties_list = list({k[0] for k in group_map.keys()})
     customer_names = frappe._dict(
         frappe.get_all(
             "Customer",
-            filters={"name": ["in", list({k[0] for k in group_map.keys()})]},
+            filters={"name": ["in", parties_list]},
             fields=["name", "customer_name"],
+            as_list=1,
+        )
+    )
+    supplier_names = frappe._dict(
+        frappe.get_all(
+            "Supplier",
+            filters={"name": ["in", parties_list]},
+            fields=["name", "supplier_name"],
             as_list=1,
         )
     )
@@ -336,6 +352,7 @@ def get_data(filters):
     # 7. Build final rows — only show vouchers with non-zero metrics
     data = []
     grand = frappe._dict(
+        party_type="",
         party="Grand Total",
         party_name="",
         out_bill=0.0,
@@ -378,8 +395,9 @@ def get_data(filters):
                 posting_date=row.posting_date,
                 voucher_type=row.voucher_type,
                 voucher_no=row.voucher_no,
+                party_type=row.party_type,
                 party=row.party,
-                party_name=customer_names.get(row.party, row.party),
+                party_name=customer_names.get(row.party) or supplier_names.get(row.party) or row.party,
                 out_bill=out_bill,
                 out_discount=out_discount,
                 paid_bill=paid_bill,
