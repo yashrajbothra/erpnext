@@ -494,11 +494,10 @@ class SerialBatchBundleService:
 				throw_error = True
 
 		if throw_error:
-			frappe.throw(
-				_(
-					"At row {0}: Serial and Batch Bundle {1} has already created. Please remove the values from the serial no or batch no fields."
-				).format(row.idx, row.serial_and_batch_bundle)
-			)
+			row.serial_no = None
+			row.batch_no = None
+			row.db_set("serial_no", None)
+			row.db_set("batch_no", None)
 
 	def set_use_serial_batch_fields(self):
 		if frappe.get_single_value("Stock Settings", "use_serial_batch_fields"):
