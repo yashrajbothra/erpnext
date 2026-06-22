@@ -263,6 +263,12 @@ def validate_taxes_and_charges(tax) -> None:
 
 def validate_account_head(idx: int, account: str, company: str, context: str | None = None) -> None:
 	"""Throw a ValidationError if the account belongs to a different company or is a group account."""
+	if not account:
+		frappe.throw(
+			_("Row {0}: {1} Account is mandatory").format(idx, context or _("Account")),
+			title=_("Missing Account"),
+		)
+
 	if company != frappe.get_cached_value("Account", account, "company"):
 		frappe.throw(
 			_("Row {0}: The {3} Account {1} does not belong to the company {2}").format(

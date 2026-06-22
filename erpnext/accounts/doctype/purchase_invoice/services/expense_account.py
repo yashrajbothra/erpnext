@@ -35,6 +35,12 @@ class ExpenseAccountService:
 				inventory_account_map = doc.get_inventory_account_map()
 
 		for item in doc.get("items"):
+			if not item.expense_account and item.item_code:
+				from erpnext.controllers.buying_controller import get_purchase_expense_account
+				item.expense_account = get_purchase_expense_account(item.item_code, doc.company).get("purchase_expense_account")
+				if not item.expense_account:
+					item.expense_account = frappe.get_cached_value("Company", doc.company, "purchase_expense_account")
+
 			# in case of auto inventory accounting,
 			# expense account is always "Stock Received But Not Billed" for a stock item
 			# except opening entry, drop-ship entry and fixed asset items

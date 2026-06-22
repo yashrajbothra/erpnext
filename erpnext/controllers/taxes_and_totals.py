@@ -177,7 +177,7 @@ class calculate_taxes_and_totals:
 				if item.discount_percentage == 100:
 					item.rate = 0.0
 				elif item.price_list_rate:
-					if not item.rate or (item.pricing_rules and item.discount_percentage > 0):
+					if (item.rate is None or (item.rate == 0.0 and self.doc.doctype != "Purchase Invoice")) or (item.pricing_rules and item.discount_percentage > 0):
 						item.rate = flt(
 							item.price_list_rate * (1.0 - (item.discount_percentage / 100.0)),
 							item.precision("rate"),
@@ -199,7 +199,7 @@ class calculate_taxes_and_totals:
 					"Purchase Receipt Item",
 				]:
 					item.rate_with_margin, item.base_rate_with_margin = self.calculate_margin(item)
-					if flt(item.rate_with_margin) > 0:
+					if flt(item.rate_with_margin) > 0 and (item.rate or self.doc.doctype != "Purchase Invoice"):
 						item.rate = flt(
 							item.rate_with_margin * (1.0 - (item.discount_percentage / 100.0)),
 							item.precision("rate"),

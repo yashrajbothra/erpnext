@@ -160,14 +160,17 @@ def get_data(filters):
         pluck="name",
     )
 
-    # 2. Identify the Debtors Discount accounts for this company
+    # 2. Identify the Debtors and Creditors Discount accounts for this company
     discount_accounts = frappe.get_all(
         "Account",
-        filters={
-            "account_name": ["like", "%Debtors Discount%"],
-            "company": company,
-            "disabled": 0,
-        },
+        filters=[
+            ["company", "=", company],
+            ["disabled", "=", 0]
+        ],
+        or_filters=[
+            ["account_name", "like", "%Debtors Discount%"],
+            ["account_name", "like", "%Creditors Discount%"]
+        ],
         pluck="name",
     )
 
@@ -242,6 +245,33 @@ def get_data(filters):
             if vp.party:
                 vp_map[vp.voucher_no] = {"party_type": vp.party_type, "party": vp.party}
 
+        for e in gl_entries:
+            if not e.party and e.voucher_no in vp_map:
+                e.party_type = vp_map[e.voucher_no]["party_type"]
+                e.party = vp_map[e.voucher_no]["party"]
+
+    # Fallback for vouchers that have absolutely NO party set in ANY GL Entry
+    still_missing = {e.voucher_no for e in gl_entries if not e.party and e.voucher_no}
+    if still_missing:
+        v_types = {}
+        for e in gl_entries:
+            if not e.party and e.voucher_no:
+                v_types.setdefault(e.voucher_type, set()).add(e.voucher_no)
+        
+        for v_type, v_nos in v_types.items():
+            if v_type == "Sales Invoice":
+                v_data = frappe.get_all("Sales Invoice", filters={"name": ["in", list(v_nos)]}, fields=["name", "customer"])
+                for d in v_data:
+                    if d.customer: vp_map[d.name] = {"party_type": "Customer", "party": d.customer}
+            elif v_type == "Purchase Invoice":
+                v_data = frappe.get_all("Purchase Invoice", filters={"name": ["in", list(v_nos)]}, fields=["name", "supplier"])
+                for d in v_data:
+                    if d.supplier: vp_map[d.name] = {"party_type": "Supplier", "party": d.supplier}
+            elif v_type == "Payment Entry":
+                v_data = frappe.get_all("Payment Entry", filters={"name": ["in", list(v_nos)]}, fields=["name", "party_type", "party"])
+                for d in v_data:
+                    if d.party: vp_map[d.name] = {"party_type": d.party_type, "party": d.party}
+                    
         for e in gl_entries:
             if not e.party and e.voucher_no in vp_map:
                 e.party_type = vp_map[e.voucher_no]["party_type"]
