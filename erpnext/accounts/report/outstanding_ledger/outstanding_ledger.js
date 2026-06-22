@@ -20,7 +20,7 @@ frappe.query_reports["Outstanding Ledger"] = {
 			label: __("Party Type"),
 			fieldtype: "Link",
 			options: "DocType",
-			get_query: function() {
+			get_query: function () {
 				return {
 					filters: {
 						"name": ["in", ["Customer", "Supplier"]]

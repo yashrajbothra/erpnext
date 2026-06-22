@@ -47,13 +47,6 @@ def get_columns():
             "width": 110,
         },
         {
-            "label": _("Voucher Type"),
-            "fieldname": "voucher_type",
-            "fieldtype": "Link",
-            "options": "DocType",
-            "width": 130,
-        },
-        {
             "label": _("Voucher No"),
             "fieldname": "voucher_no",
             "fieldtype": "Dynamic Link",
@@ -61,23 +54,11 @@ def get_columns():
             "width": 160,
         },
         {
-            "label": _("Party Type"),
-            "fieldname": "party_type",
-            "fieldtype": "Data",
-            "width": 100,
-        },
-        {
             "label": _("Party"),
             "fieldname": "party",
             "fieldtype": "Dynamic Link",
             "options": "party_type",
             "width": 130,
-        },
-        {
-            "label": _("Party Name"),
-            "fieldname": "party_name",
-            "fieldtype": "Data",
-            "width": 180,
         },
         {
             "label": _("Out Bill"),
@@ -277,6 +258,23 @@ def get_data(filters):
                 e.party_type = vp_map[e.voucher_no]["party_type"]
                 e.party = vp_map[e.voucher_no]["party"]
 
+    # Identify invoices that have no base_net_total (pure discount/tax invoices)
+    pure_discount_invoices = set()
+    si_vouchers = {e.voucher_no for e in gl_entries if e.voucher_type == "Sales Invoice"}
+    pi_vouchers = {e.voucher_no for e in gl_entries if e.voucher_type == "Purchase Invoice"}
+
+    if si_vouchers:
+        for i in range(0, len(si_vouchers), 500):
+            chunk = list(si_vouchers)[i:i+500]
+            si_zeros = frappe.get_all("Sales Invoice", filters={"name": ["in", chunk], "base_net_total": 0}, pluck="name")
+            pure_discount_invoices.update(si_zeros)
+
+    if pi_vouchers:
+        for i in range(0, len(pi_vouchers), 500):
+            chunk = list(pi_vouchers)[i:i+500]
+            pi_zeros = frappe.get_all("Purchase Invoice", filters={"name": ["in", chunk], "base_net_total": 0}, pluck="name")
+            pure_discount_invoices.update(pi_zeros)
+
     # 4. Group GL Entries by (party, voucher_no)
     debtor_set = set(debtor_accounts)
     discount_set = set(discount_accounts) if discount_accounts else set()
@@ -324,9 +322,11 @@ def get_data(filters):
             row.posting_date = gle_row.posting_date
 
         if gle_row.voucher_type in ("Sales Invoice", "Purchase Invoice"):
+            is_pure_discount = gle_row.voucher_no in pure_discount_invoices
             if account in debtor_set:
-                row.invoice_debtors_debit += debit
-                row.invoice_debtors_credit += credit
+                if not is_pure_discount:
+                    row.invoice_debtors_debit += debit
+                    row.invoice_debtors_credit += credit
             elif account in discount_set:
                 row.invoice_discount_debit += debit
                 row.invoice_discount_credit += credit
@@ -408,7 +408,7 @@ def get_data(filters):
 
     for key in sorted_keys:
         row = group_map[key]
-        out_bill = flt((row.invoice_debtors_debit - row.invoice_debtors_credit) - (row.invoice_discount_credit - row.invoice_discount_debit), 2)
+        out_bill = flt(row.invoice_debtors_debit - row.invoice_debtors_credit, 2)
         out_discount = flt(row.invoice_discount_credit - row.invoice_discount_debit, 2)
         paid_bill = flt(row.payment_debtors_credit - row.payment_debtors_debit, 2)
         paid_discount = flt(row.payment_discount_credit - row.payment_discount_debit, 2)
@@ -423,11 +423,8 @@ def get_data(filters):
         data.append(
             frappe._dict(
                 posting_date=row.posting_date,
-                voucher_type=row.voucher_type,
                 voucher_no=row.voucher_no,
-                party_type=row.party_type,
                 party=row.party,
-                party_name=customer_names.get(row.party) or supplier_names.get(row.party) or row.party,
                 out_bill=out_bill,
                 out_discount=out_discount,
                 paid_bill=paid_bill,
