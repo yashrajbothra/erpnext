@@ -1,0 +1,19 @@
+{
+ "content": null,
+ "creation": "2026-06-22 17:20:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "modified": "2026-06-22 17:20:00.000000",
+ "modified_by": "Administrator",
+ "module": "Selling",
+ "name": "t-ledger",
+ "owner": "Administrator",
+ "page_name": "t-ledger",
+ "roles": [],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "T Ledger"
+}
