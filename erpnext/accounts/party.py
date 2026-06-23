@@ -835,18 +835,8 @@ def validate_party_frozen_disabled(company, party_type, party_name):
 
 
 def validate_account_party_type(self):
-	if self.is_cancelled:
-		return
+	pass
 
-	if self.party_type and self.party:
-		account_type = frappe.get_cached_value("Account", self.account, "account_type")
-		allowed_accounts = ["ADV ACC - SM55", "Debtors Discount - SM55", "Debtors - SM55"]
-		if account_type and (account_type not in ["Receivable", "Payable", "Equity"]) and (self.account not in allowed_accounts):
-			frappe.throw(
-				_("Party Type and Party can only be set for Receivable / Payable account<br><br>{0}").format(
-					self.account
-				)
-			)
 
 
 def get_dashboard_info(party_type, party, loyalty_program=None):

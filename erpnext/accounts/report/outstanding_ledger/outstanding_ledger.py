@@ -410,6 +410,7 @@ def get_data(filters):
         row = group_map[key]
         out_bill = flt(row.invoice_debtors_debit - row.invoice_debtors_credit, 2)
         out_discount = flt(row.invoice_discount_credit - row.invoice_discount_debit, 2)
+        out_bill = flt(out_bill - out_discount, 2)
         paid_bill = flt(row.payment_debtors_credit - row.payment_debtors_debit, 2)
         paid_discount = flt(row.payment_discount_credit - row.payment_discount_debit, 2)
         total_bill = flt(out_bill - paid_bill, 2)
