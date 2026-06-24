@@ -46,12 +46,18 @@ frappe.query_reports["Outstanding Summary"] = {
 			label: __("Territory"),
 			fieldtype: "Link",
 			options: "Territory"
+		},
+		{
+			fieldname: "show_zero_values",
+			label: __("Show Zero Values"),
+			fieldtype: "Check",
+			default: 0
 		}
 	],
 	formatter: function (value, row, column, data, default_formatter) {
 		value = default_formatter(value, row, column, data);
 		if (column.fieldname === "party" && data && data.is_group && data.party !== "Grand Total") {
-			value = `<b><span style="color: #d35400">${value}</span></b>`;
+			value = `<b><span>${value}</span></b>`;
 		}
 		if (data && data.bold) {
 			value = value.bold();

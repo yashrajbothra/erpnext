@@ -34,17 +34,11 @@ def execute(filters=None):
 def get_columns(filters):
     columns = [
         {
-            "label": _("Party Type"),
-            "fieldname": "party_type",
-            "fieldtype": "Data",
-            "width": 100,
-        },
-        {
             "label": _("Party"),
             "fieldname": "party",
             "fieldtype": "Dynamic Link",
             "options": "party_type",
-            "width": 160,
+            "width": 450,
         }
     ]
         
@@ -54,21 +48,21 @@ def get_columns(filters):
             "fieldname": "total_bill",
             "fieldtype": "Currency",
             "options": "currency",
-            "width": 150,
+            "width": 175,
         },
         {
             "label": _("Total Discount"),
             "fieldname": "total_discount",
             "fieldtype": "Currency",
             "options": "currency",
-            "width": 150,
+            "width": 175,
         },
         {
             "label": _("Total Outstanding"),
             "fieldname": "total_outstanding",
             "fieldtype": "Currency",
             "options": "currency",
-            "width": 150,
+            "width": 200,
         },
         {
             "label": _("Currency"),
@@ -151,29 +145,17 @@ def get_data(filters):
         p.total_discount += flt(row.get("total_discount", 0), 2)
         p.total_outstanding += flt(row.get("total_outstanding", 0), 2)
 
-    data = []
-    grand = frappe._dict(
-        party_type="",
-        party="Grand Total",
-        is_group=0,
-        party_name="",
-        out_bill=0.0,
-        out_discount=0.0,
-        paid_bill=0.0,
-        paid_discount=0.0,
-        total_bill=0.0,
-        total_discount=0.0,
-        total_outstanding=0.0,
-        currency=company_currency,
-        bold=1,
-    )
+    show_zero_values = filters.get("show_zero_values")
 
+    data = []
     for key, row in sorted(party_map.items(), key=lambda x: x[0]):
         if row.out_bill == 0 and row.out_discount == 0 and row.paid_bill == 0 and row.paid_discount == 0 and row.total_bill == 0 and row.total_discount == 0 and row.total_outstanding == 0:
             continue
             
+        if not show_zero_values and -5 <= flt(row.total_outstanding) <= 5:
+            continue
+            
         d = frappe._dict(
-            party_type=row.party_type,
             party=row.party,
             is_group=row.is_group,
             out_bill=flt(row.out_bill, 2),
@@ -186,23 +168,5 @@ def get_data(filters):
             currency=row.currency,
         )
         data.append(d)
-
-        grand.out_bill += row.out_bill
-        grand.out_discount += row.out_discount
-        grand.paid_bill += row.paid_bill
-        grand.paid_discount += row.paid_discount
-        grand.total_bill += row.total_bill
-        grand.total_discount += row.total_discount
-        grand.total_outstanding += row.total_outstanding
-
-    if data:
-        grand.out_bill = flt(grand.out_bill, 2)
-        grand.out_discount = flt(grand.out_discount, 2)
-        grand.paid_bill = flt(grand.paid_bill, 2)
-        grand.paid_discount = flt(grand.paid_discount, 2)
-        grand.total_bill = flt(grand.total_bill, 2)
-        grand.total_discount = flt(grand.total_discount, 2)
-        grand.total_outstanding = flt(grand.total_outstanding, 2)
-        data.append(grand)
 
     return data
