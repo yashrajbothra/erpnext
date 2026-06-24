@@ -20,7 +20,7 @@ frappe.query_reports["Outstanding Summary"] = {
 			label: __("Party Type"),
 			fieldtype: "Link",
 			options: "DocType",
-			get_query: function() {
+			get_query: function () {
 				return {
 					filters: {
 						"name": ["in", ["Customer", "Supplier"]]
@@ -28,6 +28,7 @@ frappe.query_reports["Outstanding Summary"] = {
 				};
 			}
 		},
+
 		{
 			fieldname: "party",
 			label: __("Party"),
@@ -46,5 +47,15 @@ frappe.query_reports["Outstanding Summary"] = {
 			fieldtype: "Link",
 			options: "Territory"
 		}
-	]
+	],
+	formatter: function (value, row, column, data, default_formatter) {
+		value = default_formatter(value, row, column, data);
+		if (column.fieldname === "party" && data && data.is_group && data.party !== "Grand Total") {
+			value = `<b><span style="color: #d35400">${value}</span></b>`;
+		}
+		if (data && data.bold) {
+			value = value.bold();
+		}
+		return value;
+	}
 };

@@ -1,0 +1,26 @@
+{
+ "content": null,
+ "creation": "2026-06-24 12:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "modified": "2026-06-24 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Selling",
+ "name": "bulk-update-customer-group",
+ "owner": "Administrator",
+ "page_name": "bulk-update-customer-group",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Sales Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Bulk Update Customer Group"
+}
