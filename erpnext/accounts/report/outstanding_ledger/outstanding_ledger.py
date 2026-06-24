@@ -324,12 +324,12 @@ def get_data(filters):
         if gle_row.voucher_type in ("Sales Invoice", "Purchase Invoice"):
             is_pure_discount = gle_row.voucher_no in pure_discount_invoices
             if account in debtor_set:
-                if not is_pure_discount:
-                    row.invoice_debtors_debit += debit
-                    row.invoice_debtors_credit += credit
+                row.invoice_debtors_debit += debit
+                row.invoice_debtors_credit += credit
             elif account in discount_set:
-                row.invoice_discount_debit += debit
-                row.invoice_discount_credit += credit
+                if not is_pure_discount:
+                    row.invoice_discount_debit += debit
+                    row.invoice_discount_credit += credit
         else:
             if account in debtor_set:
                 row.payment_debtors_debit += debit
@@ -408,9 +408,15 @@ def get_data(filters):
 
     for key in sorted_keys:
         row = group_map[key]
+        
+        party_name = customer_names.get(row.party) or supplier_names.get(row.party) or ""
+        if str(row.party).strip().upper() == "OPENING" or str(party_name).strip().upper() == "OPENING":
+            continue
+
         out_bill = flt(row.invoice_debtors_debit - row.invoice_debtors_credit, 2)
         out_discount = flt(row.invoice_discount_credit - row.invoice_discount_debit, 2)
-        out_bill = flt(out_bill - out_discount, 2)
+        if out_bill != 0:
+            out_bill = flt(out_bill - out_discount, 2)
         paid_bill = flt(row.payment_debtors_credit - row.payment_debtors_debit, 2)
         paid_discount = flt(row.payment_discount_credit - row.payment_discount_debit, 2)
         total_bill = flt(out_bill - paid_bill, 2)
@@ -425,6 +431,7 @@ def get_data(filters):
             frappe._dict(
                 posting_date=row.posting_date,
                 voucher_no=row.voucher_no,
+                party_type=row.party_type,
                 party=row.party,
                 out_bill=out_bill,
                 out_discount=out_discount,

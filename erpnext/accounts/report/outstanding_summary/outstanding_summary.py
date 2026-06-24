@@ -15,7 +15,6 @@ Paid Discount  : Total received / settled against Debtors Discount
 
 import frappe
 from frappe import _
-from frappe.query_builder.functions import Sum
 from frappe.utils import flt, getdate, nowdate
 
 
@@ -111,262 +110,46 @@ def get_columns():
 # ---------------------------------------------------------------------------
 
 def get_data(filters):
-    report_date = getdate(filters.get("report_date") or nowdate())
-    company = filters.get("company") or frappe.db.get_single_value(
-        "Global Defaults", "default_company"
-    )
-    company_currency = (
-        frappe.get_cached_value("Company", company, "default_currency")
-        if company
-        else frappe.db.get_default("currency")
-    )
-
-    # ------------------------------------------------------------------
-    # 1. Identify the Debtors (Receivable) and Creditors (Payable) accounts for this company
-    debtor_accounts = frappe.get_all(
-        "Account",
-        filters={"account_type": ["in", ["Receivable", "Payable"]], "company": company, "disabled": 0},
-        pluck="name",
-    )
-
-    # 2. Identify the Debtors and Creditors Discount accounts for this company
-    discount_accounts = frappe.get_all(
-        "Account",
-        filters=[
-            ["company", "=", company],
-            ["disabled", "=", 0]
-        ],
-        or_filters=[
-            ["account_name", "like", "%Debtors Discount%"],
-            ["account_name", "like", "%Creditors Discount%"]
-        ],
-        pluck="name",
-    )
-
-    if not debtor_accounts:
-        frappe.msgprint(
-            _("No Receivable or Payable accounts found for company {0}").format(company),
-            alert=True,
-        )
+    from erpnext.accounts.report.outstanding_ledger.outstanding_ledger import get_data as get_ledger_data
+    
+    ledger_data = get_ledger_data(filters)
+    if not ledger_data:
         return []
 
-    # 3. Fetch GL Entries for both account sets in a single query
-    gle = frappe.qb.DocType("GL Entry")
-
-    base_query = (
-        frappe.qb.from_(gle)
-        .select(
-            gle.party,
-            gle.party_type,
-            gle.account,
-            gle.debit,
-            gle.credit,
-            gle.voucher_no,
-            gle.voucher_type,
-        )
-        .where(gle.is_cancelled == 0)
-        .where(gle.posting_date <= report_date)
-        .where(gle.company == company)
-        .where(
-            gle.account.isin(debtor_accounts + (discount_accounts or []))
-        )
-    )
-
-    if filters.get("party"):
-        parties = filters.party if isinstance(filters.party, (list, tuple)) else [filters.party]
-        party_vouchers = frappe.get_all(
-            "GL Entry",
-            filters={
-                "party": ["in", parties],
-                "company": company,
-                "is_cancelled": 0,
-                "posting_date": ["<=", report_date],
-                "account": ["in", debtor_accounts],
-            },
-            pluck="voucher_no",
-        )
-        if not party_vouchers:
-            return []
-        base_query = base_query.where(gle.voucher_no.isin(list(set(party_vouchers))))
-
-    gl_entries = base_query.run(as_dict=True)
-
-    if not gl_entries:
-        return []
-
-    # Resolve missing party details from other GL Entries in the same voucher
-    vp_map = {}
-    for e in gl_entries:
-        if e.party:
-            vp_map[e.voucher_no] = {"party_type": e.party_type, "party": e.party}
-
-    for e in gl_entries:
-        if not e.party and e.voucher_no in vp_map:
-            e.party_type = vp_map[e.voucher_no]["party_type"]
-            e.party = vp_map[e.voucher_no]["party"]
-
-    # Only if still missing after local mapping, we query the DB for the remainder
-    still_missing = list({e.voucher_no for e in gl_entries if not e.party and e.voucher_no})
-    if still_missing:
-        # Standard query to resolve party details from the DB, chunked for safety
-        voucher_parties = []
-        for i in range(0, len(still_missing), 500):
-            chunk = still_missing[i : i + 500]
-            chunk_parties = frappe.get_all(
-                "GL Entry",
-                filters={
-                    "voucher_no": ["in", chunk],
-                    "party": ["is", "set"],
-                },
-                fields=["voucher_no", "party_type", "party"],
-            )
-            voucher_parties.extend(chunk_parties)
-
-        for vp in voucher_parties:
-            if vp.party:
-                vp_map[vp.voucher_no] = {"party_type": vp.party_type, "party": vp.party}
-
-        for e in gl_entries:
-            if not e.party and e.voucher_no in vp_map:
-                e.party_type = vp_map[e.voucher_no]["party_type"]
-                e.party = vp_map[e.voucher_no]["party"]
-
-    # Fallback for vouchers that have absolutely NO party set in ANY GL Entry
-    still_missing = {e.voucher_no for e in gl_entries if not e.party and e.voucher_no}
-    if still_missing:
-        v_types = {}
-        for e in gl_entries:
-            if not e.party and e.voucher_no:
-                v_types.setdefault(e.voucher_type, set()).add(e.voucher_no)
-        
-        for v_type, v_nos in v_types.items():
-            if v_type == "Sales Invoice":
-                v_data = frappe.get_all("Sales Invoice", filters={"name": ["in", list(v_nos)]}, fields=["name", "customer"])
-                for d in v_data:
-                    if d.customer: vp_map[d.name] = {"party_type": "Customer", "party": d.customer}
-            elif v_type == "Purchase Invoice":
-                v_data = frappe.get_all("Purchase Invoice", filters={"name": ["in", list(v_nos)]}, fields=["name", "supplier"])
-                for d in v_data:
-                    if d.supplier: vp_map[d.name] = {"party_type": "Supplier", "party": d.supplier}
-            elif v_type == "Payment Entry":
-                v_data = frappe.get_all("Payment Entry", filters={"name": ["in", list(v_nos)]}, fields=["name", "party_type", "party"])
-                for d in v_data:
-                    if d.party: vp_map[d.name] = {"party_type": d.party_type, "party": d.party}
-                    
-        for e in gl_entries:
-            if not e.party and e.voucher_no in vp_map:
-                e.party_type = vp_map[e.voucher_no]["party_type"]
-                e.party = vp_map[e.voucher_no]["party"]
-
-    # Identify invoices that have no base_net_total (pure discount/tax invoices)
-    pure_discount_invoices = set()
-    si_vouchers = {e.voucher_no for e in gl_entries if e.voucher_type == "Sales Invoice"}
-    pi_vouchers = {e.voucher_no for e in gl_entries if e.voucher_type == "Purchase Invoice"}
-
-    if si_vouchers:
-        for i in range(0, len(si_vouchers), 500):
-            chunk = list(si_vouchers)[i:i+500]
-            si_zeros = frappe.get_all("Sales Invoice", filters={"name": ["in", chunk], "base_net_total": 0}, pluck="name")
-            pure_discount_invoices.update(si_zeros)
-
-    if pi_vouchers:
-        for i in range(0, len(pi_vouchers), 500):
-            chunk = list(pi_vouchers)[i:i+500]
-            pi_zeros = frappe.get_all("Purchase Invoice", filters={"name": ["in", chunk], "base_net_total": 0}, pluck="name")
-            pure_discount_invoices.update(pi_zeros)
-
-    # 4. Aggregate per party
-    debtor_set = set(debtor_accounts)
-    discount_set = set(discount_accounts) if discount_accounts else set()
     party_map = {}
+    company_currency = None
 
-    for gle_row in gl_entries:
-        party = gle_row.party
-        if not party:
+    for row in ledger_data:
+        if not row.get("party") or row.get("party") == "Grand Total":
             continue
 
-        # Skip non-Customer/Supplier parties unless no party_type filter
-        if gle_row.party_type and gle_row.party_type not in ("Customer", "Supplier"):
-            continue
-
+        party = row.party
         if party not in party_map:
             party_map[party] = frappe._dict(
-                party_type=gle_row.party_type,
+                party_type=row.get("party_type", ""),
                 party=party,
-                invoice_debtors_debit=0.0,
-                invoice_debtors_credit=0.0,
-                invoice_discount_debit=0.0,
-                invoice_discount_credit=0.0,
-                payment_debtors_debit=0.0,
-                payment_debtors_credit=0.0,
-                payment_discount_debit=0.0,
-                payment_discount_credit=0.0,
-                currency=company_currency,
+                out_bill=0.0,
+                out_discount=0.0,
+                paid_bill=0.0,
+                paid_discount=0.0,
+                total_bill=0.0,
+                total_discount=0.0,
+                total_outstanding=0.0,
+                currency=row.get("currency"),
             )
 
-        debit = flt(gle_row.debit)
-        credit = flt(gle_row.credit)
-        account = gle_row.account
+        if not company_currency:
+            company_currency = row.get("currency")
 
-        if gle_row.voucher_type in ("Sales Invoice", "Purchase Invoice"):
-            is_pure_discount = gle_row.voucher_no in pure_discount_invoices
-            if account in debtor_set:
-                if not is_pure_discount:
-                    party_map[party].invoice_debtors_debit += debit
-                    party_map[party].invoice_debtors_credit += credit
-            elif account in discount_set:
-                party_map[party].invoice_discount_debit += debit
-                party_map[party].invoice_discount_credit += credit
-        else:
-            if account in debtor_set:
-                party_map[party].payment_debtors_debit += debit
-                party_map[party].payment_debtors_credit += credit
-            elif account in discount_set:
-                party_map[party].payment_discount_debit += debit
-                party_map[party].payment_discount_credit += credit
+        p = party_map[party]
+        p.out_bill += flt(row.get("out_bill", 0), 2)
+        p.out_discount += flt(row.get("out_discount", 0), 2)
+        p.paid_bill += flt(row.get("paid_bill", 0), 2)
+        p.paid_discount += flt(row.get("paid_discount", 0), 2)
+        p.total_bill += flt(row.get("total_bill", 0), 2)
+        p.total_discount += flt(row.get("total_discount", 0), 2)
+        p.total_outstanding += flt(row.get("total_outstanding", 0), 2)
 
-    if not party_map:
-        return []
-
-    # 5. Optionally filter by customer_group / territory
-    if filters.get("customer_group") or filters.get("territory"):
-        cust_filters = {}
-        if filters.get("customer_group"):
-            cust_filters["customer_group"] = filters.customer_group
-        if filters.get("territory"):
-            cust_filters["territory"] = filters.territory
-
-        valid_customers = frappe.get_all(
-            "Customer",
-            filters=cust_filters,
-            pluck="name",
-        )
-        valid_set = set(valid_customers)
-        party_map = {k: v for k, v in party_map.items() if k in valid_set}
-
-    if not party_map:
-        return []
-
-    # 6. Fetch customer and supplier names
-    parties_list = list(party_map.keys())
-    customer_names = frappe._dict(
-        frappe.get_all(
-            "Customer",
-            filters={"name": ["in", parties_list]},
-            fields=["name", "customer_name"],
-            as_list=1,
-        )
-    )
-    supplier_names = frappe._dict(
-        frappe.get_all(
-            "Supplier",
-            filters={"name": ["in", parties_list]},
-            fields=["name", "supplier_name"],
-            as_list=1,
-        )
-    )
-
-    # 7. Build final rows — only show parties with non-zero outstanding
     data = []
     grand = frappe._dict(
         party_type="",
@@ -384,41 +167,31 @@ def get_data(filters):
     )
 
     for party, row in sorted(party_map.items(), key=lambda x: x[0]):
-        out_bill = flt(row.invoice_debtors_debit - row.invoice_debtors_credit, 2)
-        out_discount = flt(row.invoice_discount_credit - row.invoice_discount_debit, 2)
-        out_bill = flt(out_bill - out_discount, 2)
-        paid_bill = flt(row.payment_debtors_credit - row.payment_debtors_debit, 2)
-        paid_discount = flt(row.payment_discount_credit - row.payment_discount_debit, 2)
-        total_bill = flt(out_bill - paid_bill, 2)
-        total_discount = flt(out_discount - paid_discount, 2)
-        total_outstanding = flt(total_bill + total_discount, 2)
-
-        # Skip if nothing outstanding and no paid amounts
-        if out_bill == 0 and out_discount == 0 and paid_bill == 0 and paid_discount == 0 and total_bill == 0 and total_discount == 0 and total_outstanding == 0:
+        if row.out_bill == 0 and row.out_discount == 0 and row.paid_bill == 0 and row.paid_discount == 0 and row.total_bill == 0 and row.total_discount == 0 and row.total_outstanding == 0:
             continue
-
+            
         data.append(
             frappe._dict(
                 party_type=row.party_type,
                 party=party,
-                out_bill=out_bill,
-                out_discount=out_discount,
-                paid_bill=paid_bill,
-                paid_discount=paid_discount,
-                total_bill=total_bill,
-                total_discount=total_discount,
-                total_outstanding=total_outstanding,
-                currency=company_currency,
+                out_bill=flt(row.out_bill, 2),
+                out_discount=flt(row.out_discount, 2),
+                paid_bill=flt(row.paid_bill, 2),
+                paid_discount=flt(row.paid_discount, 2),
+                total_bill=flt(row.total_bill, 2),
+                total_discount=flt(row.total_discount, 2),
+                total_outstanding=flt(row.total_outstanding, 2),
+                currency=row.currency,
             )
         )
 
-        grand.out_bill += out_bill
-        grand.out_discount += out_discount
-        grand.paid_bill += paid_bill
-        grand.paid_discount += paid_discount
-        grand.total_bill += total_bill
-        grand.total_discount += total_discount
-        grand.total_outstanding += total_outstanding
+        grand.out_bill += row.out_bill
+        grand.out_discount += row.out_discount
+        grand.paid_bill += row.paid_bill
+        grand.paid_discount += row.paid_discount
+        grand.total_bill += row.total_bill
+        grand.total_discount += row.total_discount
+        grand.total_outstanding += row.total_outstanding
 
     if data:
         grand.out_bill = flt(grand.out_bill, 2)
