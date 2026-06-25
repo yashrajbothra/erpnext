@@ -1,0 +1,25 @@
+{
+ "content": null, 
+ "creation": "2024-05-15 10:00:00.000000", 
+ "docstatus": 0, 
+ "doctype": "Page", 
+ "idx": 0, 
+ "modified": "2024-05-15 10:00:00.000000", 
+ "modified_by": "Administrator", 
+ "module": "Stock", 
+ "name": "stock-balance-summary", 
+ "owner": "Administrator", 
+ "page_name": "stock-balance-summary", 
+ "roles": [
+  {
+   "role": "Stock User"
+  },
+  {
+   "role": "Stock Manager"
+  }
+ ], 
+ "script": null, 
+ "standard": "Yes", 
+ "style": null, 
+ "title": "Stock Balance Summary"
+}

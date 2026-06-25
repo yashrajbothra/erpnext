@@ -381,20 +381,6 @@ def get_data(filters):
 
     # 7. Build final rows — only show vouchers with non-zero metrics
     data = []
-    grand = frappe._dict(
-        party_type="",
-        party="Grand Total",
-        party_name="",
-        out_bill=0.0,
-        out_discount=0.0,
-        paid_bill=0.0,
-        paid_discount=0.0,
-        total_bill=0.0,
-        total_discount=0.0,
-        total_outstanding=0.0,
-        currency=company_currency,
-        bold=1,
-    )
 
     # Sort data by customer ID, then posting date, then voucher_no
     sorted_keys = sorted(
@@ -443,24 +429,5 @@ def get_data(filters):
                 currency=company_currency,
             )
         )
-
-        grand.out_bill += out_bill
-        grand.out_discount += out_discount
-        grand.paid_bill += paid_bill
-        grand.paid_discount += paid_discount
-        grand.total_bill += total_bill
-        grand.total_discount += total_discount
-        grand.total_outstanding += total_outstanding
-
-    if data:
-        data.append({})  # blank separator
-        grand.out_bill = flt(grand.out_bill, 2)
-        grand.out_discount = flt(grand.out_discount, 2)
-        grand.paid_bill = flt(grand.paid_bill, 2)
-        grand.paid_discount = flt(grand.paid_discount, 2)
-        grand.total_bill = flt(grand.total_bill, 2)
-        grand.total_discount = flt(grand.total_discount, 2)
-        grand.total_outstanding = flt(grand.total_outstanding, 2)
-        data.append(grand)
 
     return data

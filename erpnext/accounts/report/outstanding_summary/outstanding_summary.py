@@ -152,7 +152,7 @@ def get_data(filters):
         if row.out_bill == 0 and row.out_discount == 0 and row.paid_bill == 0 and row.paid_discount == 0 and row.total_bill == 0 and row.total_discount == 0 and row.total_outstanding == 0:
             continue
             
-        if not show_zero_values and -5 <= flt(row.total_outstanding) <= 5:
+        if not show_zero_values and -9 <= flt(row.total_outstanding) <= 9:
             continue
             
         d = frappe._dict(
