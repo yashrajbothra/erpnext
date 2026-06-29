@@ -82,7 +82,7 @@ class PipeBalanceDashboard {
 		};
 
 		frappe.call({
-			method: 'erpnext.stock.page.pipe_balance_view.pipe_balance_view.get_dashboard_data',
+			method: 'erpnext.selling.page.pipe_balance_view.pipe_balance_view.get_dashboard_data',
 			args: { filters: filters },
 			callback: (r) => {
 				if (r.message) {
@@ -101,7 +101,7 @@ class PipeBalanceDashboard {
 		};
 
 		open_url_post(
-			'/api/method/erpnext.stock.page.pipe_balance_view.pipe_balance_view.export_to_excel',
+			'/api/method/erpnext.selling.page.pipe_balance_view.pipe_balance_view.export_to_excel',
 			{ filters: JSON.stringify(filters) },
 			true
 		);
@@ -126,54 +126,130 @@ class PipeBalanceDashboard {
 		});
 
 		groups.forEach((rows, pkt_no) => {
-			const first_row = rows[0];
+			const spec_groups = new Map();
+			rows.forEach(row => {
+				let normalized_thk = (row.thickness || '').trim();
+				const parsed_thk = parseFloat(normalized_thk);
+				if (!isNaN(parsed_thk)) {
+					normalized_thk = String(parsed_thk);
+				} else {
+					normalized_thk = normalized_thk.toLowerCase();
+				}
+
+				const spec_key = `${row.grade || ''}_${row.finish || ''}_${row.type || ''}_${row.od || ''}_${normalized_thk}_${row.size || ''}`;
+				if (!spec_groups.has(spec_key)) {
+					spec_groups.set(spec_key, []);
+				}
+				spec_groups.get(spec_key).push(row);
+			});
 
 			let total_nos = 0;
 			let total_weight = 0;
+			const balance_rows = [];
 
-			const rows_html = rows.map(row => {
-				const weight = flt(row.weight);
-				total_nos += flt(row.nos);
-				total_weight += weight;
+			spec_groups.forEach((spec_rows, spec_key) => {
+				// Sort by date ascending to find oldest
+				spec_rows.sort((a, b) => {
+					const date_a = a.date || '';
+					const date_b = b.date || '';
+					return date_a.localeCompare(date_b);
+				});
 
-				const row_class = weight <= 0.001 ? 'row-empty' : '';
+				const oldest_row = spec_rows[0];
+
+				// Find latest positive weight row for warehouse
+				let latest_active_row = null;
+				for (let i = spec_rows.length - 1; i >= 0; i--) {
+					if (flt(spec_rows[i].weight) > 0) {
+						latest_active_row = spec_rows[i];
+						break;
+					}
+				}
+				if (!latest_active_row) {
+					latest_active_row = oldest_row;
+				}
+
+				const schedule_row = spec_rows.find(r => r.schedule && r.schedule.trim() !== '');
+				const schedule = schedule_row ? schedule_row.schedule : '';
+
+				let net_nos = 0;
+				let net_weight = 0;
+				spec_rows.forEach(row => {
+					const weight = flt(row.weight);
+					net_nos += weight < 0 ? -flt(row.pieces) : flt(row.pieces);
+					net_weight += weight;
+				});
+
+				const finish_val = (oldest_row.finish || '').trim().toUpperCase();
+				const is_2b_od = finish_val === '2B OD SIZE';
+				const is_sold = is_2b_od ? (net_weight <= 0.001) : (net_weight <= 0.001 && net_nos <= 0.001);
+
+				if (!this.show_sold_stock && is_sold) {
+					return;
+				}
+
+				total_nos += net_nos;
+				total_weight += net_weight;
+
+				balance_rows.push({
+					oldest_row: oldest_row,
+					latest_active_row: latest_active_row,
+					schedule: schedule,
+					net_nos: net_nos,
+					net_weight: net_weight
+				});
+			});
+
+			if (balance_rows.length === 0) {
+				return;
+			}
+
+			const rows_html = balance_rows.map(({ oldest_row, latest_active_row, schedule, net_nos, net_weight }) => {
+				const row_class = net_weight <= 0.001 ? 'row-empty' : '';
 
 				let date_str = '';
-				if (row.r_date) {
-					const date = frappe.datetime.str_to_obj(row.r_date);
+				if (oldest_row.date) {
+					const date = frappe.datetime.str_to_obj(oldest_row.date);
 					date_str = date.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
 				}
 
-				const l_days = row.r_date ? frappe.datetime.get_diff(frappe.datetime.get_today(), row.r_date) : 0;
+				const l_days = oldest_row.date ? frappe.datetime.get_diff(frappe.datetime.get_today(), oldest_row.date) : 0;
+
+				let thickness_display = schedule || oldest_row.thickness || '';
+				if (thickness_display && !/sch/i.test(thickness_display)) {
+					const val = parseFloat(thickness_display);
+					if (!isNaN(val)) {
+						thickness_display = `${val} mm`;
+					} else if (!thickness_display.endsWith('mm')) {
+						thickness_display = `${thickness_display} mm`;
+					}
+				}
 
 				return `
 					<tr class="${row_class}">
+						<td style="font-weight: 700; color: var(--pipe-primary)">${pkt_no}</td>
 						<td>${date_str}</td>
-						<td>${row.grade || ''}</td>
-						<td>${row.finish || ''}</td>
-						<td>${row.type || ''}</td>
-						<td>${row.od || row.nb || ''}</td>
-						<td>${row.schedule || row.thik || ''}</td>
-						<td>${row.length || ''}</td>
-						<td style="text-align: right">${row.nos || 0}</td>
-						<td style="text-align: right">${frappe.format(row.weight, { fieldtype: 'Float' }, { only_value: true })}</td>
-						<td>${row.warehouse || ''}</td>
+						<td>${oldest_row.grade || ''}</td>
+						<td>${oldest_row.finish || ''}</td>
+						<td>${oldest_row.type || ''}</td>
+						<td>${oldest_row.od || ''}</td>
+						<td>${thickness_display}</td>
+						<td>${oldest_row.size || ''}</td>
+						<td style="text-align: right">${net_nos}</td>
+						<td style="text-align: right">${frappe.format(net_weight, { fieldtype: 'Float' }, { only_value: true })}</td>
+						<td>${latest_active_row.plot || ''}</td>
 						<td>${l_days}</td>
 					</tr>
 				`;
 			}).join('');
 
-			if (total_weight <= 0.001 && total_nos <= 0.001) {
-				return;
-			}
-
 			const box_html = `
 				<div class="pkt-box" style="margin-bottom: 25px;">
-					<div style="font-weight: 700; margin-bottom: 5px; color: var(--pipe-primary)">PACKET: ${pkt_no}</div>
 					<div class="pipe-table-container">
 						<table class="pipe-table">
 							<thead>
 								<tr>
+									<th>PKT NO</th>
 									<th style="width: 80px">R DATE</th>
 									<th>GRADE</th>
 									<th>FINISH</th>
@@ -190,7 +266,7 @@ class PipeBalanceDashboard {
 							<tbody>
 								${rows_html}
 								<tr style="background: #f8fafc; font-weight: 800">
-									<td colspan="7"></td>
+									<td colspan="8">TOTAL</td>
 									<td style="text-align: right">${total_nos}</td>
 									<td style="text-align: right">${frappe.format(total_weight, { fieldtype: 'Float' }, { only_value: true })}</td>
 									<td colspan="2"></td>

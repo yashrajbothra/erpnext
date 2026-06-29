@@ -11,11 +11,11 @@ def get_dashboard_data(filters=None):
     
     # Calculate summary stats
     total_weight = sum(d.get("weight", 0) for d in data)
-    total_nos = sum(d.get("nos", 0) for d in data)
+    total_nos = sum(d.get("pieces", 0) for d in data)
     unique_packets = len(set(d.get("pkt_no") for d in data if d.get("pkt_no")))
     
     # Oldest received date
-    dates = [d.get("r_date") for d in data if d.get("r_date")]
+    dates = [d.get("date") for d in data if d.get("date")]
     oldest_date = min(dates) if dates else None
     
     return {
@@ -47,41 +47,93 @@ def export_to_excel(filters=None):
     
     xlsx_data = []
     columns = [
-        "R DATE", "GRADE", "FINISH", "TYPE", "OD", "THIK", "LENGTH", "NOS", "WEIGHT", "PLOT", "L DAY"
+        "PKT NO", "R DATE", "GRADE", "FINISH", "TYPE", "OD", "THIK", "LENGTH", "NOS", "WEIGHT", "PLOT", "L DAY"
     ]
     
+    show_sold_stock = frappe.cint(filters.get("show_sold_stock")) if filters else 0
     for pkt_no, rows in groups.items():
-        if sum(float(r.get("weight") or 0) for r in rows) <= 0.001 and sum(float(r.get("nos") or 0) for r in rows) <= 0.001:
+        spec_groups = {}
+        for row in rows:
+            thk_str = str(row.get("thickness") or "").strip()
+            try:
+                val = float(thk_str)
+                normalized_thk = str(int(val) if val.is_integer() else val)
+            except ValueError:
+                normalized_thk = thk_str.lower()
+
+            spec_key = (
+                row.get("grade") or "",
+                row.get("finish") or "",
+                row.get("type") or "",
+                row.get("od") or "",
+                normalized_thk,
+                row.get("size") or ""
+            )
+            if spec_key not in spec_groups:
+                spec_groups[spec_key] = []
+            spec_groups[spec_key].append(row)
+
+        balance_rows = []
+        for spec_key, spec_rows in spec_groups.items():
+            # Sort by date ascending to find oldest
+            spec_rows.sort(key=lambda r: str(r.get("date") or ""))
+            oldest_row = spec_rows[0]
+            
+            # Find latest row with positive weight for plot (warehouse)
+            latest_active_row = oldest_row
+            for r in reversed(spec_rows):
+                if float(r.get("weight") or 0) > 0:
+                    latest_active_row = r
+                    break
+            
+            net_weight = sum(float(r.get("weight") or 0) for r in spec_rows)
+            net_pieces = sum((-float(r.get("pieces") or 0) if float(r.get("weight") or 0) < 0 else float(r.get("pieces") or 0)) for r in spec_rows)
+            
+            finish = (oldest_row.get("finish") or "").strip().upper()
+            is_2b_od = finish == "2B OD SIZE"
+            is_sold = (net_weight <= 0.001) if is_2b_od else (net_weight <= 0.001 and net_pieces <= 0.001)
+
+            if not show_sold_stock and is_sold:
+                continue
+
+            schedule = next((r.get("schedule") for r in spec_rows if r.get("schedule")), "")
+            balance_rows.append((oldest_row, latest_active_row, schedule, net_pieces, net_weight))
+
+        if not balance_rows:
             continue
 
-        # Packet Header
-        xlsx_data.append([f"PACKET: {pkt_no}"])
-        # Table Headers
         xlsx_data.append(columns)
         
         total_nos = 0
         total_weight = 0
-        
-        for row in rows:
+        for oldest_row, latest_active_row, schedule, net_pieces, net_weight in balance_rows:
+            thk = schedule or oldest_row.get("thickness") or ""
+            if thk and "sch" not in str(thk).lower():
+                try:
+                    val = float(thk)
+                    thk = f"{int(val) if val.is_integer() else val} mm"
+                except ValueError:
+                    if not str(thk).endswith("mm"):
+                        thk = f"{thk} mm"
+
             xlsx_data.append([
-                row.get("r_date"),
-                row.get("grade"),
-                row.get("finish"),
-                row.get("type"),
-                row.get("od"),
-                row.get("thik"),
-                row.get("length"),
-                row.get("nos"),
-                row.get("weight"),
-                row.get("warehouse"),
-                row.get("l_days")
+                pkt_no,
+                oldest_row.get("date"),
+                oldest_row.get("grade"),
+                oldest_row.get("finish"),
+                oldest_row.get("type"),
+                oldest_row.get("od"),
+                thk,
+                oldest_row.get("size"),
+                net_pieces,
+                net_weight,
+                latest_active_row.get("plot"),
+                oldest_row.get("l_days")
             ])
-            total_nos += float(row.get("nos") or 0)
-            total_weight += float(row.get("weight") or 0)
-        
-        # Total row
-        xlsx_data.append(["", "", "", "", "", "", "TOTAL:", total_nos, total_weight, "", ""])
-        # Blank rows for separation
+            total_nos += net_pieces
+            total_weight += net_weight
+            
+        xlsx_data.append(["TOTAL", "", "", "", "", "", "", "", total_nos, total_weight, "", ""])
         xlsx_data.append([])
         xlsx_data.append([])
 
@@ -102,19 +154,18 @@ def export_to_excel(filters=None):
             continue
         
         current_row = ws.max_row
-        is_packet_header = str(row_data[0]).startswith("PACKET:")
-        is_table_header = row_data[0] == "R DATE"
-        is_total_row = len(row_data) > 6 and row_data[6] == "TOTAL:"
+        is_table_header = row_data[0] == "PKT NO"
+        is_total_row = row_data[0] == "TOTAL"
         
         # Bold formatting
-        if is_packet_header or is_table_header or is_total_row:
+        if is_table_header or is_total_row:
             for cell in ws[current_row]:
                 cell.font = bold_font
         
         # Yellow background for sold rows (Weight <= 0.001)
         # Skip headers and total rows
-        elif not is_packet_header and not is_table_header and not is_total_row:
-            if len(row_data) > 8 and isinstance(row_data[8], (int, float)) and row_data[8] <= 0.001:
+        elif not is_table_header and not is_total_row:
+            if len(row_data) > 9 and isinstance(row_data[9], (int, float)) and row_data[9] <= 0.001:
                 for cell in ws[current_row]:
                     cell.fill = yellow_fill
 

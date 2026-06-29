@@ -176,11 +176,8 @@ def get_data(filters):
 				THEN sle.custom_nb 
 				ELSE sle.custom_od 
 			END AS od,
-			CASE 
-				WHEN sle.custom_schedule IS NOT NULL AND sle.custom_schedule != '' 
-				THEN sle.custom_schedule 
-				ELSE sle.custom_thickness 
-			END AS thickness,
+			sle.custom_schedule AS schedule,
+			sle.custom_thickness AS thickness,
 			sle.custom_pieces as pieces,
 			sle.actual_qty as weight,
 			DATEDIFF(CURDATE(), sle.posting_date) AS l_days
@@ -195,7 +192,7 @@ def get_data(filters):
 			ON f.parent = i.name AND f.attribute = 'Finish'
 
 		WHERE (%(item_group)s IS NULL OR i.item_group = %(item_group)s)
-		AND LOWER(i.item_group) != 'pipe'
+		AND LOWER(i.item_group) = 'pipe'
 
 		ORDER BY sle.posting_date ASC, sle.posting_time ASC
 	"""

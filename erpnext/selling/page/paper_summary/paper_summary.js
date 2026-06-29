@@ -124,10 +124,13 @@ frappe.pages['paper-summary'].on_page_load = function (wrapper) {
             return;
         }
 
-        let account = fixed_account;
-        let counterpart_filter = null;
+        let account, counterpart_filter;
         if (filter_account && filter_account.length > 0) {
-            counterpart_filter = filter_account;
+            account = filter_account;
+            counterpart_filter = null;
+        } else {
+            account = fixed_account;
+            counterpart_filter = null;
         }
 
         frappe.call({
@@ -246,7 +249,21 @@ frappe.pages['paper-summary'].on_page_load = function (wrapper) {
             ["Customer", "Opening Balance", "Debit", "Credit", "Dr. Interest", "Cr. Interest", "Closing Balance"]
         ];
 
+        let total_ob = 0;
+        let total_dr = 0;
+        let total_cr = 0;
+        let total_dr_int = 0;
+        let total_cr_int = 0;
+        let total_cl = 0;
+
         current_data.forEach(row => {
+            total_ob += flt(row.opening_balance);
+            total_dr += flt(row.total_debit);
+            total_cr += flt(row.total_credit);
+            total_dr_int += flt(row.total_debit_interest);
+            total_cr_int += flt(row.total_credit_interest);
+            total_cl += flt(row.closing_balance);
+
             export_data.push([
                 row.party,
                 flt(row.opening_balance, 2),
@@ -257,6 +274,16 @@ frappe.pages['paper-summary'].on_page_load = function (wrapper) {
                 flt(row.closing_balance, 2)
             ]);
         });
+
+        export_data.push([
+            "Total",
+            flt(total_ob, 2),
+            flt(total_dr, 2),
+            flt(total_cr, 2),
+            flt(total_dr_int, 2),
+            flt(total_cr_int, 2),
+            flt(total_cl, 2)
+        ]);
 
         frappe.tools.downloadify(export_data, null, `Paper_Summary`);
     }

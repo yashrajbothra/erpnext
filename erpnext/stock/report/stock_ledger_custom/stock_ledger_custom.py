@@ -182,6 +182,8 @@ def get_data(filters):
 	conditions = ["sle.docstatus < 2"]
 	if filters.get("item_group"):
 		conditions.append("i.item_group = %(item_group)s")
+	if filters.get("to_date"):
+		conditions.append("sle.posting_date <= %(to_date)s")
 	
 	conditions.append("LOWER(i.item_group) != 'pipe'")
 
@@ -193,6 +195,8 @@ def get_data(filters):
 	
 	party_select = "MAX(sle.custom_party) as party," if has_party else "'' as party,"
 	by_select = "MAX(sle.custom_by) as by_col," if has_by else "'' as by_col,"
+
+	ref_date = "%(to_date)s" if filters.get("to_date") else "CURDATE()"
 
 	query = f"""
 		SELECT
@@ -206,7 +210,7 @@ def get_data(filters):
 			sle.custom_pkt_no as pkt_no,
 			MAX(sle.custom_hsn_code) as hsn,
 			MAX(sle.custom_code) as code,
-			MAX(sle.custom_size) as size,
+			sle.custom_size as size,
 			{party_select}
 			{by_select}
 			MAX(CASE 
@@ -214,14 +218,14 @@ def get_data(filters):
 				THEN sle.custom_nb 
 				ELSE sle.custom_od 
 			END) AS od,
-			MAX(CASE 
+			(CASE 
 				WHEN sle.custom_schedule IS NOT NULL AND sle.custom_schedule != '' 
 				THEN sle.custom_schedule 
 				ELSE sle.custom_thickness 
 			END) AS thickness,
 			SUM(sle.custom_pieces) as pieces,
 			SUM(sle.actual_qty) as weight,
-			DATEDIFF(CURDATE(), MAX(sle.posting_date)) AS l_days
+			DATEDIFF({ref_date}, MAX(sle.posting_date)) AS l_days
 
 		FROM `tabItem` i
 		JOIN `tabStock Ledger Entry` sle ON sle.item_code = i.name
@@ -238,6 +242,9 @@ def get_data(filters):
 			sle.item_code,
 			sle.warehouse,
 			sle.custom_pkt_no,
+			sle.custom_size,
+			sle.custom_thickness,
+			sle.custom_schedule,
 			i.item_group,
 			g.attribute_value,
 			t.attribute_value,

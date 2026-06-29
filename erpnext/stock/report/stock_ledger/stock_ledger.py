@@ -221,15 +221,16 @@ def execute(filters=None):
 			elif filters.get("batch_no"):
 				batch_no = filters.batch_no
 				
-		if not batch_no:
+		if filters.get("batch_no") and batch_no != filters.get("batch_no"):
 			continue
 
-		size = ""
-		schedule = ""
-		if batch_no:
+		size = row.get("custom_size") or ""
+		schedule = row.get("custom_schedule") or ""
+
+		if (not size or not schedule) and batch_no:
 			if "MIX" in str(batch_no).upper():
-				size = "MIX"
-				schedule = "MIX"
+				if not size: size = "MIX"
+				if not schedule: schedule = "MIX"
 			else:
 				od_match = re.search(r"OD\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
 				thk_match = re.search(r"THK\s*:\s*([0-9\.]+)", batch_no, re.IGNORECASE)
@@ -246,8 +247,8 @@ def execute(filters=None):
 							as_dict=True,
 						)
 						if pipe_dim:
-							size = pipe_dim.nb
-							schedule = pipe_dim.schedule
+							if not size: size = pipe_dim.nb
+							if not schedule: schedule = pipe_dim.schedule
 
 					if not size:
 						pipe_dim = frappe.db.get_value(
@@ -257,8 +258,8 @@ def execute(filters=None):
 							as_dict=True,
 						)
 						if pipe_dim:
-							size = pipe_dim.nb
-							schedule = f"{thk} MM" if thk else None
+							if not size: size = pipe_dim.nb
+							if not schedule: schedule = f"{thk} MM" if thk else None
 
 				if not size:
 					if od:
@@ -621,6 +622,8 @@ def get_stock_ledger_entries(filters, items):
 			sle.serial_no,
 			sle.custom_pieces,
 			sle.custom_citi_no,
+			sle.custom_size,
+			sle.custom_schedule,
 		)
 		.where((sle.docstatus < 2) & (sle.is_cancelled == 0) & (sle.posting_datetime[from_date:to_date]))
 		.orderby(sle.posting_datetime)

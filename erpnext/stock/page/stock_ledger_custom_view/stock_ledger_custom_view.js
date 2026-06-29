@@ -42,6 +42,13 @@ class StockLedgerDashboard {
 			options: 'Item Group',
 			change: () => this.refresh()
 		});
+
+		this.page.add_field({
+			fieldname: 'to_date',
+			label: __('To Date'),
+			fieldtype: 'Date',
+			change: () => this.refresh()
+		});
 	}
 
 	make_layout() {
@@ -54,7 +61,8 @@ class StockLedgerDashboard {
 
 	refresh() {
 		const filters = {
-			item_group: this.page.fields_dict.item_group.get_value()
+			item_group: this.page.fields_dict.item_group.get_value(),
+			to_date: this.page.fields_dict.to_date.get_value()
 		};
 
 		frappe.call({
@@ -106,7 +114,8 @@ class StockLedgerDashboard {
 
 	export_to_excel() {
 		const filters = {
-			item_group: this.page.fields_dict.item_group.get_value()
+			item_group: this.page.fields_dict.item_group.get_value(),
+			to_date: this.page.fields_dict.to_date.get_value()
 		};
 
 		open_url_post(

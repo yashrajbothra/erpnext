@@ -54,21 +54,21 @@ frappe.pages['paper'].on_page_load = function (wrapper) {
 		fieldname: 'cutoff_date',
 		label: __('Cutoff Date'),
 		fieldtype: 'Date',
-		default: frappe.datetime.get_today()
+		default: '2026-03-31'
 	});
 
 	page.add_field({
 		fieldname: 'interest_rate',
 		label: __('Interest Rate (%)'),
 		fieldtype: 'Float',
-		default: 0
+		default: 0.9
 	});
 
 	page.add_field({
 		fieldname: 'use_entry_date',
 		label: __('As per Entry Date'),
 		fieldtype: 'Check',
-		default: 0
+		default: 1
 	});
 
 	page.set_primary_action(__('Load Ledger'), () => {
@@ -481,11 +481,20 @@ frappe.pages['paper'].on_page_load = function (wrapper) {
 		let opening_bal = current_data.opening_balance || 0;
 		let op_bal_text = opening_bal >= 0 ? 'Opening Balance (Debit)' : 'Opening Balance (Credit)';
 
+		let format_date = (dt) => dt ? moment(dt).format('DD/MM/YY') : "";
+
+		let op_bal_row;
+		if (opening_bal >= 0) {
+			op_bal_row = [op_bal_text, Math.abs(opening_bal), "", "", "", "", "", "", "", ""];
+		} else {
+			op_bal_row = ["", "", "", "", "", op_bal_text, Math.abs(opening_bal), "", "", ""];
+		}
+
 		let export_data = [
-			[op_bal_text, "", "", Math.abs(opening_bal), "", "", "", "", "", "", "", "", "", ""],
+			op_bal_row,
 			[
-				"Date", "Debit Voucher Type", "Debit Voucher No", "Debit Amount", "Debit Due Days", "Debit Interest", "Party / Remarks",
-				"Date", "Credit Voucher Type", "Credit Voucher No", "Credit Amount", "Credit Due Days", "Credit Interest", "Party / Remarks"
+				"Debit Amount", "Party", "Date", "Due Days", "Interest",
+				"Credit Amount", "Party", "Date", "Due Days", "Interest"
 			]
 		];
 
@@ -501,8 +510,8 @@ frappe.pages['paper'].on_page_load = function (wrapper) {
 			let d = debit[i] || {};
 			let c = credit[i] || {};
 
-			let dr_info = [d.party || "", d.remarks || ""].filter(Boolean).join(" - ");
-			let cr_info = [c.party || "", c.remarks || ""].filter(Boolean).join(" - ");
+			let dr_info = [d.party || ""].filter(Boolean).join(" - ");
+			let cr_info = [c.party || ""].filter(Boolean).join(" - ");
 
 			let d_date = (use_entry_date && d.entry_date) ? d.entry_date : d.date;
 			let c_date = (use_entry_date && c.entry_date) ? c.entry_date : c.date;
@@ -532,34 +541,30 @@ frappe.pages['paper'].on_page_load = function (wrapper) {
 			}
 
 			export_data.push([
-				d_date ? frappe.datetime.str_to_user(d_date) : "",
-				(d.voucher_type || "") + (d.is_discount ? " (Discount)" : ""),
-				d.voucher_no || "",
 				d.amount || 0.0,
+				dr_info,
+				format_date(d_date),
 				d_days,
 				d_interest,
-				dr_info,
-				c_date ? frappe.datetime.str_to_user(c_date) : "",
-				(c.voucher_type || "") + (c.is_discount ? " (Discount)" : ""),
-				c.voucher_no || "",
 				c.amount || 0.0,
+				cr_info,
+				format_date(c_date),
 				c_days,
-				c_interest,
-				cr_info
+				c_interest
 			]);
 		}
 
 		export_data.push([
-			"", "", "Total Period Debit:", current_data.total_debit || 0, "", total_debit_interest, "",
-			"", "", "Total Period Credit:", current_data.total_credit || 0, "", total_credit_interest, ""
+			"Total Period Debit:", current_data.total_debit || 0, "", total_debit_interest, "",
+			"Total Period Credit:", current_data.total_credit || 0, "", total_credit_interest, ""
 		]);
 
 		let closing_bal = current_data.closing_balance || 0;
 		let bal_text = closing_bal >= 0 ? 'Closing Balance (Debit)' : 'Closing Balance (Credit)';
 
 		export_data.push([
-			"", "", "", "", "", "", "",
-			"", "", "", bal_text + ":", "", Math.abs(closing_bal), ""
+			"", "", "", "", "",
+			bal_text + ":", Math.abs(closing_bal), "", "", ""
 		]);
 
 		frappe.tools.downloadify(export_data, null, `General_T_Ledger_${account}`);
