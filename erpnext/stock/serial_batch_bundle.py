@@ -1235,6 +1235,10 @@ class SerialBatchCreation:
 				frappe.throw(msg, title=_("Insufficient Stock"))
 
 	def set_auto_serial_batch_entries_for_outward(self):
+		if not self.has_serial_no and self.has_batch_no and getattr(self, "sle", None) and self.sle.get("batch_no"):
+			self.batches = {self.sle.batch_no: abs(self.actual_qty) if self.actual_qty else 0}
+			return
+
 		from erpnext.stock.doctype.batch.batch import get_available_batches
 		from erpnext.stock.doctype.serial_no.serial_no import get_serial_nos_for_outward
 
