@@ -55,13 +55,17 @@ frappe.query_reports["Outstanding Summary"] = {
 		}
 	],
 	formatter: function (value, row, column, data, default_formatter) {
-		value = default_formatter(value, row, column, data);
-		if (column.fieldname === "party" && data && data.is_group && data.party !== "Grand Total") {
-			value = `<b><span>${value}</span></b>`;
+		if (column.fieldname === "party" && data && data.party !== "Grand Total") {
+			const doctype = data.party_type;
+			if (doctype && value) {
+				const href = frappe.utils.get_form_link(doctype, value);
+				const link_html = `<a class="grey" href="${href}" data-doctype="${doctype}" data-name="${value}">${value}</a>`;
+				if (data.is_group) {
+					return `<b><span>${link_html}</span></b>`;
+				}
+				return link_html;
+			}
 		}
-		if (data && data.bold) {
-			value = value.bold();
-		}
-		return value;
+		return default_formatter(value, row, column, data);
 	}
 };

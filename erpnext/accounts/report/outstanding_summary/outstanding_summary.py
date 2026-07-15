@@ -38,8 +38,7 @@ def get_columns(filters):
             "fieldname": "party",
             "fieldtype": "Dynamic Link",
             "options": "party_type",
-            "width": 450,
-        }
+        },
     ]
         
     columns.extend([
@@ -82,6 +81,10 @@ def get_columns(filters):
 def get_data(filters):
     from erpnext.accounts.report.outstanding_ledger.outstanding_ledger import get_data as get_ledger_data
     
+    # Restrict to Debtors and Creditors accounts to exclude other Receivable/Payable accounts
+    filters.account_name_like = ["%Debtors%", "%Creditors%"]
+    filters.discount_account_name_like = ["%Debtors Discount%", "%Creditors Discount%"]
+
     ledger_data = get_ledger_data(filters)
     if not ledger_data:
         return []
@@ -112,17 +115,18 @@ def get_data(filters):
 
         group = party_to_group.get((party_type, party))
         if group:
-            key = ('Merged Group', 'group', group)
-            final_party_type = "Customer Group" if party_type == "Customer" else "Supplier Group"
+            key = ('group', group)
+            name = group
         else:
-            final_party_type = party_type
-            key = (final_party_type, 'party', party)
+            key = ('party', party)
+            name = party
 
         if key not in party_map:
             party_map[key] = frappe._dict(
-                party_type=final_party_type,
-                party=group if key[1] == 'group' else party,
-                is_group=1 if key[1] == 'group' else 0,
+                party_type=party_type,
+                base_type=party_type,
+                party=name,
+                is_group=1 if key[0] == 'group' else 0,
                 out_bill=0.0,
                 out_discount=0.0,
                 paid_bill=0.0,
@@ -132,11 +136,15 @@ def get_data(filters):
                 total_outstanding=0.0,
                 currency=row.get("currency"),
             )
+        else:
+            if party_map[key].party_type != party_type and party_map[key].party_type != "Customer & Supplier":
+                party_map[key].party_type = "Customer & Supplier"
 
         if not company_currency:
             company_currency = row.get("currency")
 
         p = party_map[key]
+        
         p.out_bill += flt(row.get("out_bill", 0), 2)
         p.out_discount += flt(row.get("out_discount", 0), 2)
         p.paid_bill += flt(row.get("paid_bill", 0), 2)
@@ -148,15 +156,16 @@ def get_data(filters):
     show_zero_values = filters.get("show_zero_values")
 
     data = []
-    for key, row in sorted(party_map.items(), key=lambda x: x[0]):
+    for key, row in sorted(party_map.items(), key=lambda x: str(x[1].party).lower()):
         if row.out_bill == 0 and row.out_discount == 0 and row.paid_bill == 0 and row.paid_discount == 0 and row.total_bill == 0 and row.total_discount == 0 and row.total_outstanding == 0:
             continue
             
-        if not show_zero_values and -9 <= flt(row.total_outstanding) <= 9:
+        if not show_zero_values and -100 <= flt(row.total_outstanding) <= 100:
             continue
             
         d = frappe._dict(
             party=row.party,
+            party_type=row.party_type,
             is_group=row.is_group,
             out_bill=flt(row.out_bill, 2),
             out_discount=flt(row.out_discount, 2),

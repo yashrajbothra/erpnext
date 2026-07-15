@@ -141,14 +141,19 @@ def get_data(filters):
         else frappe.db.get_default("currency")
     )
 
-    # 1. Identify the Debtors (Receivable) and Creditors (Payable) accounts for this company
     debtor_account_filters = {"account_type": ["in", ["Receivable", "Payable"]], "company": company, "disabled": 0}
+    debtor_or_filters = []
+    
     if filters.get("account_name_like"):
-        debtor_account_filters["account_name"] = ["like", filters.get("account_name_like")]
+        if isinstance(filters.account_name_like, list):
+            debtor_or_filters = [["account_name", "like", name] for name in filters.account_name_like]
+        else:
+            debtor_account_filters["account_name"] = ["like", filters.get("account_name_like")]
 
     debtor_accounts = frappe.get_all(
         "Account",
         filters=debtor_account_filters,
+        or_filters=debtor_or_filters,
         pluck="name",
     )
 
@@ -158,9 +163,12 @@ def get_data(filters):
         ["account_name", "like", "%Creditors Discount%"]
     ]
     if filters.get("discount_account_name_like"):
-        discount_or_filters = [
-            ["account_name", "like", filters.get("discount_account_name_like")]
-        ]
+        if isinstance(filters.discount_account_name_like, list):
+            discount_or_filters = [["account_name", "like", name] for name in filters.discount_account_name_like]
+        else:
+            discount_or_filters = [
+                ["account_name", "like", filters.get("discount_account_name_like")]
+            ]
 
     discount_accounts = frappe.get_all(
         "Account",
@@ -303,8 +311,11 @@ def get_data(filters):
         if not party:
             continue
 
-        # Skip non-Customer/Supplier parties unless no party_type filter
+        # Skip non-Customer/Supplier parties
         if gle_row.party_type and gle_row.party_type not in ("Customer", "Supplier"):
+            continue
+
+        if filters.get("party_type") and gle_row.party_type != filters.party_type:
             continue
 
         voucher_no = gle_row.voucher_no
@@ -425,10 +436,15 @@ def get_data(filters):
 
         out_bill = flt(row.invoice_debtors_debit - row.invoice_debtors_credit, 2)
         out_discount = flt(row.invoice_discount_credit - row.invoice_discount_debit, 2)
+        
+
         if out_bill != 0:
             out_bill = flt(out_bill - out_discount, 2)
+            
         paid_bill = flt(row.payment_debtors_credit - row.payment_debtors_debit, 2)
         paid_discount = flt(row.payment_discount_credit - row.payment_discount_debit, 2)
+        
+
         total_bill = flt(out_bill - paid_bill, 2)
         total_discount = flt(out_discount - paid_discount, 2)
         total_outstanding = flt(total_bill + total_discount, 2)
