@@ -47,6 +47,13 @@ def get_columns():
             "width": 110,
         },
         {
+            "label": _("Voucher Type"),
+            "fieldname": "voucher_type",
+            "fieldtype": "Data",
+            "width": 120,
+            "hidden": 1,
+        },
+        {
             "label": _("Voucher No"),
             "fieldname": "voucher_no",
             "fieldtype": "Dynamic Link",
@@ -135,23 +142,33 @@ def get_data(filters):
     )
 
     # 1. Identify the Debtors (Receivable) and Creditors (Payable) accounts for this company
+    debtor_account_filters = {"account_type": ["in", ["Receivable", "Payable"]], "company": company, "disabled": 0}
+    if filters.get("account_name_like"):
+        debtor_account_filters["account_name"] = ["like", filters.get("account_name_like")]
+
     debtor_accounts = frappe.get_all(
         "Account",
-        filters={"account_type": ["in", ["Receivable", "Payable"]], "company": company, "disabled": 0},
+        filters=debtor_account_filters,
         pluck="name",
     )
 
     # 2. Identify the Debtors and Creditors Discount accounts for this company
+    discount_or_filters = [
+        ["account_name", "like", "%Debtors Discount%"],
+        ["account_name", "like", "%Creditors Discount%"]
+    ]
+    if filters.get("discount_account_name_like"):
+        discount_or_filters = [
+            ["account_name", "like", filters.get("discount_account_name_like")]
+        ]
+
     discount_accounts = frappe.get_all(
         "Account",
         filters=[
             ["company", "=", company],
             ["disabled", "=", 0]
         ],
-        or_filters=[
-            ["account_name", "like", "%Debtors Discount%"],
-            ["account_name", "like", "%Creditors Discount%"]
-        ],
+        or_filters=discount_or_filters,
         pluck="name",
     )
 
@@ -258,22 +275,23 @@ def get_data(filters):
                 e.party_type = vp_map[e.voucher_no]["party_type"]
                 e.party = vp_map[e.voucher_no]["party"]
 
-    # Identify invoices that have no base_net_total (pure discount/tax invoices)
-    pure_discount_invoices = set()
-    si_vouchers = {e.voucher_no for e in gl_entries if e.voucher_type == "Sales Invoice"}
-    pi_vouchers = {e.voucher_no for e in gl_entries if e.voucher_type == "Purchase Invoice"}
+    # Cleaned up pure discount invoices logic
+    pe_vouchers = {e.voucher_no for e in gl_entries if e.voucher_type == "Payment Entry"}
+    pe_mode_of_payments = {}
+    if pe_vouchers:
+        for i in range(0, len(pe_vouchers), 500):
+            chunk = list(pe_vouchers)[i:i+500]
+            pe_data = frappe.get_all("Payment Entry", filters={"name": ["in", chunk]}, fields=["name", "mode_of_payment"], limit=0)
+            for d in pe_data:
+                pe_mode_of_payments[d.name] = d.mode_of_payment
 
-    if si_vouchers:
-        for i in range(0, len(si_vouchers), 500):
-            chunk = list(si_vouchers)[i:i+500]
-            si_zeros = frappe.get_all("Sales Invoice", filters={"name": ["in", chunk], "base_net_total": 0}, pluck="name")
-            pure_discount_invoices.update(si_zeros)
-
-    if pi_vouchers:
-        for i in range(0, len(pi_vouchers), 500):
-            chunk = list(pi_vouchers)[i:i+500]
-            pi_zeros = frappe.get_all("Purchase Invoice", filters={"name": ["in", chunk], "base_net_total": 0}, pluck="name")
-            pure_discount_invoices.update(pi_zeros)
+    je_vouchers = {e.voucher_no for e in gl_entries if e.voucher_type == "Journal Entry"}
+    if je_vouchers:
+        for i in range(0, len(je_vouchers), 500):
+            chunk = list(je_vouchers)[i:i+500]
+            je_data = frappe.get_all("Journal Entry", filters={"name": ["in", chunk]}, fields=["name", "mode_of_payment"], limit=0)
+            for d in je_data:
+                pe_mode_of_payments[d.name] = d.mode_of_payment
 
     # 4. Group GL Entries by (party, voucher_no)
     debtor_set = set(debtor_accounts)
@@ -322,18 +340,24 @@ def get_data(filters):
             row.posting_date = gle_row.posting_date
 
         if gle_row.voucher_type in ("Sales Invoice", "Purchase Invoice"):
-            is_pure_discount = gle_row.voucher_no in pure_discount_invoices
             if account in debtor_set:
                 row.invoice_debtors_debit += debit
                 row.invoice_debtors_credit += credit
             elif account in discount_set:
-                if not is_pure_discount:
-                    row.invoice_discount_debit += debit
-                    row.invoice_discount_credit += credit
+                row.invoice_discount_debit += debit
+                row.invoice_discount_credit += credit
         else:
+            is_discount_payment = False
+            if gle_row.voucher_type in ("Payment Entry", "Journal Entry") and pe_mode_of_payments.get(gle_row.voucher_no) == "CQ":
+                is_discount_payment = True
+
             if account in debtor_set:
-                row.payment_debtors_debit += debit
-                row.payment_debtors_credit += credit
+                if is_discount_payment:
+                    row.payment_discount_debit += debit
+                    row.payment_discount_credit += credit
+                else:
+                    row.payment_debtors_debit += debit
+                    row.payment_debtors_credit += credit
             elif account in discount_set:
                 row.payment_discount_debit += debit
                 row.payment_discount_credit += credit
@@ -416,6 +440,7 @@ def get_data(filters):
         data.append(
             frappe._dict(
                 posting_date=row.posting_date,
+                voucher_type=row.voucher_type,
                 voucher_no=row.voucher_no,
                 party_type=row.party_type,
                 party=row.party,

@@ -32,7 +32,7 @@ def get_summary_data(filters=None):
         WHERE sle.is_cancelled = 0
         AND (%(item_group)s IS NULL OR %(item_group)s = '' OR i.item_group = %(item_group)s)
         GROUP BY sle.item_code, sle.warehouse
-        HAVING SUM(sle.actual_qty) > 0
+        HAVING ROUND(SUM(sle.actual_qty), 4) != 0
     """
     bins = frappe.db.sql(query, {"item_group": item_group}, as_dict=1)
 

@@ -729,7 +729,7 @@ class BuyingController(SubcontractingController):
 				frappe.throw(msg=message, title=_("Mismatch"), exc=QtyMismatchError)
 
 	def validate_negative_quantity(self, item_row, field_list):
-		if self.is_return:
+		if self.is_return or self.doctype == "Purchase Invoice":
 			return
 
 		item_row = item_row.as_dict()

@@ -287,7 +287,7 @@ class PurchaseInvoice(BuyingController):
 		self.validate_uom_is_integer("stock_uom", "stock_qty")
 		expense_account_service = ExpenseAccountService(self)
 		expense_account_service.set_expense_account(for_validate=True)
-		# expense_account_service.validate_expense_account()
+		expense_account_service.validate_expense_account()
 		expense_account_service.set_against_expense_account()
 		self.validate_write_off_account()
 		self.validate_write_off_cost_center()

@@ -28,7 +28,7 @@ def convert_excel(file_url):
     # Headers based on user image
     headers = [
         "Payment Type", "Posting Date", "Entry Date", "Company", "Mode of Payment", "Party Type", "Party (Custom)", 
-        "Account Paid From", "Paid From Account Type", "Account Paid To" , "Paid Amount", "Received Amount", "Remarks"
+        "Account Paid From", "Paid From Account Type", "Account Paid To" , "Paid Amount", "Received Amount"
     ]
     out_sheet.append(headers)
     
@@ -107,25 +107,23 @@ def convert_excel(file_url):
         if "OPP.BAL." in row_strs or "OP. BAL" in row_strs:
             continue
             
-        # Left side (Receive) based on image:
-        # Col 3:AC, 4:AMT, 5:PARTY, 6:MODE, 7:DATE, 8:REMARK
-        # (Skipping Col 2 as requested: "dont use 2 col")
+        # Left side (Receive) based on paper.xlsx:
+        # Col 3:AC, 4:AMT, 5:PARTY, 6:DATE, 7:REMARK
         l_acc    = row[2] if len(row) > 2 else None
         l_amt    = row[3] if len(row) > 3 else None
         l_party  = row[4] if len(row) > 4 else None
-        l_mode   = row[5] if len(row) > 5 else None
-        l_date   = row[6] if len(row) > 6 else None
-        l_remark = row[7] if len(row) > 7 else None
+        l_date   = row[5] if len(row) > 5 else None
+        l_remark = row[6] if len(row) > 6 else None
+        l_mode   = None
         
-        # Right side (Pay) based on image:
-        # Col 10:AC, 11:AMT, 12:PARTY, 13:DATE, 14:MODE, 15:REMARK
-        # (Index 8 is Amount/9th column - skipped as requested)
-        r_acc    = row[9] if len(row) > 9 else None
-        r_amt    = row[10] if len(row) > 10 else None
-        r_party  = row[11] if len(row) > 11 else None
-        r_date   = row[12] if len(row) > 12 else None
-        r_mode   = row[13] if len(row) > 13 else None
-        r_remark = row[14] if len(row) > 14 else None
+        # Right side (Pay) based on paper.xlsx:
+        # Col 9:AC, 10:AMT, 11:PARTY, 12:DATE, 13:REMARK
+        r_acc    = row[8] if len(row) > 8 else None
+        r_amt    = row[9] if len(row) > 9 else None
+        r_party  = row[10] if len(row) > 10 else None
+        r_date   = row[11] if len(row) > 11 else None
+        r_remark = row[12] if len(row) > 12 else None
+        r_mode   = None
         
         def parse_row_date(val, h_date):
             if not val: return None
@@ -187,7 +185,7 @@ def convert_excel(file_url):
             
             out_sheet.append([
                 "Receive", f_posting_date, f_header_date, company_name, l_mode, "Customer", final_l_party ,
-                acc_paid_from, "Receivable", acc_paid_to, final_amt, final_amt, narration
+                acc_paid_from, "Receivable", acc_paid_to, final_amt, final_amt
             ])
         
         # Right side (Pay)
@@ -213,7 +211,7 @@ def convert_excel(file_url):
 
             out_sheet.append([
                 "Pay", f_posting_r_date, f_header_date, company_name, r_mode, "Customer", final_r_party ,
-                acc_paid_from_row, "Payable", acc_paid_from, final_amt, final_amt, narration
+                acc_paid_from_row, "Payable", acc_paid_from, final_amt, final_amt
             ])
 
     if errors:

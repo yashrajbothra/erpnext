@@ -170,7 +170,7 @@ def convert_excel(file_url):
             
             l_acc_upper = str(l_acc or "").strip().upper()
             if l_acc_upper in ["GOODS AC", "GOODS ACC", "GOODS INT AC", "GOODS INT ACC"]:
-                acc_paid_from = "Debtors Discount" if str(l_mode or "").strip().upper() == "LC" else "Debtors"
+                acc_paid_from = "Debtors Discount" if str(l_mode or "").strip().upper() in ["LC", "CQ"] else "Debtors"
                 final_l_party = l_party
             elif l_acc_upper in ["ADV ACC", "IMP ACC", "IMP EXP ACC"]:
                 acc_paid_from = l_acc or "Random Account"
@@ -199,7 +199,7 @@ def convert_excel(file_url):
             
             r_acc_upper = str(r_acc or "").strip().upper()
             if r_acc_upper in ["GOODS AC", "GOODS ACC", "GOODS INT AC", "GOODS INT ACC"]:
-                acc_paid_from = "Debtors Discount" if str(r_mode or "").strip().upper() == "LC" else "Debtors"
+                acc_paid_from = "Debtors Discount" if str(r_mode or "").strip().upper() in ["LC", "CQ"] else "Debtors"
                 final_r_party = r_party
             elif r_acc_upper in ["ADV ACC", "IMP ACC", "IMP EXP ACC"]:
                 acc_paid_from = r_acc or "Random Account"

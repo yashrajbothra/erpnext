@@ -398,6 +398,11 @@ class SerialandBatchBundle(Document):
 		]:
 			return
 
+		if not allow_negative_stock:
+			from erpnext.stock.stock_ledger import is_negative_stock_allowed
+
+			allow_negative_stock = is_negative_stock_allowed(item_code=self.item_code)
+
 		if return_against := self.get_return_against(parent=parent):
 			self.set_valuation_rate_for_return_entry(return_against, row, save, prev_sle=prev_sle)
 		elif self.type_of_transaction == "Outward":

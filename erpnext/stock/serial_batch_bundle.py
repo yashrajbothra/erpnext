@@ -157,6 +157,9 @@ class SerialBatchBundle:
 		self.set_serial_and_batch_bundle(sn_doc)
 
 	def validate_actual_qty(self, sn_doc):
+		if self.sle.voucher_type == "Purchase Invoice":
+			return
+
 		link = get_link_to_form("Serial and Batch Bundle", sn_doc.name)
 
 		condition = {
@@ -1540,7 +1543,11 @@ def update_batch_qty(voucher_type, voucher_no, docstatus, via_landed_cost_vouche
 		current_qty += flt(qty, precision) * (-1 if docstatus == 2 else 1)
 
 		if not via_landed_cost_voucher and current_qty < 0:
-			throw_negative_batch_validation(batch, current_qty)
+			from erpnext.stock.stock_ledger import is_negative_stock_allowed
+
+			item_code = frappe.db.get_value("Batch", batch, "item")
+			if not is_negative_stock_allowed(item_code=item_code):
+				throw_negative_batch_validation(batch, current_qty)
 
 		frappe.db.set_value("Batch", batch, "batch_qty", current_qty)
 

@@ -46,5 +46,12 @@ frappe.query_reports["Outstanding Ledger"] = {
 			fieldtype: "Link",
 			options: "Territory"
 		}
-	]
+	],
+	formatter: function (value, row, column, data, default_formatter) {
+		value = default_formatter(value, row, column, data);
+		if (column.fieldname === "voucher_no" && value && typeof value === "string") {
+			value = value.replace("<a ", '<a target="_blank" ');
+		}
+		return value;
+	}
 };

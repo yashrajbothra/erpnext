@@ -143,11 +143,7 @@ class BaseStockGLComposer(BaseGLComposer):
 		if warehouse_with_no_account:
 			for wh in warehouse_with_no_account:
 				if frappe.get_cached_value("Warehouse", wh, "company"):
-					frappe.throw(
-						_(
-							"Warehouse {0} is not linked to any account, please mention the account in the warehouse record or set default inventory account in company {1}."
-						).format(wh, doc.company)
-					)
+					pass
 
 		return process_gl_map(
 			gl_list, precision=precision, from_repost=frappe.flags.through_repost_item_valuation

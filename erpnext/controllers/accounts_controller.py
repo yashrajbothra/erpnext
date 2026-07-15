@@ -985,7 +985,7 @@ class AccountsController(TransactionBase):
 			)
 
 	def validate_qty_is_not_zero(self):
-		if self.flags.allow_zero_qty:
+		if self.flags.allow_zero_qty or self.doctype == "Purchase Invoice":
 			return
 
 		for item in self.items:
