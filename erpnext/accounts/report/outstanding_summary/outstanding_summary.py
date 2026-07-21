@@ -38,6 +38,7 @@ def get_columns(filters):
             "fieldname": "party",
             "fieldtype": "Dynamic Link",
             "options": "party_type",
+            "width": 300,
         },
     ]
         
@@ -166,6 +167,7 @@ def get_data(filters):
         d = frappe._dict(
             party=row.party,
             party_type=row.party_type,
+            link_doctype=row.base_type,
             is_group=row.is_group,
             out_bill=flt(row.out_bill, 2),
             out_discount=flt(row.out_discount, 2),

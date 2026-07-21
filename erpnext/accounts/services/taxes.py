@@ -30,6 +30,9 @@ class TaxService:
 
 		tax_master_doctype = doc.meta.get_field("taxes_and_charges").options
 
+		if getattr(doc, "amended_from", None):
+			return
+
 		if (doc.is_new() or self.is_pos_profile_changed()) and not doc.get("taxes"):
 			if doc.company and not doc.get("taxes_and_charges"):
 				doc.taxes_and_charges = frappe.db.get_value(
@@ -52,6 +55,9 @@ class TaxService:
 			return
 
 		if doc.get("taxes") or doc.get("is_pos"):
+			return
+
+		if getattr(doc, "amended_from", None):
 			return
 
 		if frappe.get_single_value(
@@ -177,6 +183,7 @@ class TaxService:
 		return amount, base_amount
 
 
+@frappe.whitelist()
 def get_tax_rate(account_head: str) -> dict:
 	return frappe.get_cached_value("Account", account_head, ["tax_rate", "account_name"], as_dict=True)
 

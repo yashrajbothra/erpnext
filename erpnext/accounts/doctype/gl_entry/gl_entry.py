@@ -134,7 +134,8 @@ class GLEntry(Document):
 		mandatory = ["account", "voucher_type", "voucher_no", "company"]
 		for k in mandatory:
 			if not self.get(k):
-				frappe.throw(_("{0} is required").format(_(self.meta.get_label(k))))
+				msg = f"{self.meta.get_label(k)} is required. Details: account={self.account}, party={self.party}, voucher={self.voucher_type} {self.voucher_no}"
+				frappe.throw(msg)
 
 		if not self.is_cancelled and not (self.party_type and self.party):
 			account_type = frappe.get_cached_value("Account", self.account, "account_type")

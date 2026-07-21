@@ -56,7 +56,7 @@ frappe.query_reports["Outstanding Summary"] = {
 	],
 	formatter: function (value, row, column, data, default_formatter) {
 		if (column.fieldname === "party" && data && data.party !== "Grand Total") {
-			const doctype = data.party_type;
+			const doctype = data.link_doctype || data.party_type;
 			if (doctype && value) {
 				const href = frappe.utils.get_form_link(doctype, value);
 				const link_html = `<a class="grey" href="${href}" data-doctype="${doctype}" data-name="${value}">${value}</a>`;

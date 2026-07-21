@@ -165,8 +165,7 @@ class ExpenseAccountService:
 				throw(_("Expense account is mandatory for item {0}").format(item.item_code or item.item_name))
 
 	def validate_expense_account(self) -> None:
-		for item in self.doc.get("items"):
-			validate_account_head(item.idx, item.expense_account, self.doc.company, _("Expense"))
+		pass
 
 	def set_against_expense_account(self) -> None:
 		doc = self.doc

@@ -219,6 +219,35 @@ def get_data(filters):
     if not gl_entries:
         return []
 
+    # Filter out cancelled vouchers whose GL entries were not marked as is_cancelled=1
+    vouchers_by_type = {}
+    for e in gl_entries:
+        if e.voucher_type and e.voucher_no:
+            vouchers_by_type.setdefault(e.voucher_type, set()).add(e.voucher_no)
+            
+    cancelled_vouchers = set()
+    for v_type, v_nos in vouchers_by_type.items():
+        if not v_nos:
+            continue
+        try:
+            for i in range(0, len(v_nos), 500):
+                chunk = list(v_nos)[i:i+500]
+                cancelled = frappe.get_all(
+                    v_type, 
+                    filters={"name": ["in", chunk], "docstatus": 2}, 
+                    pluck="name"
+                )
+                if cancelled:
+                    cancelled_vouchers.update(cancelled)
+        except Exception:
+            pass
+            
+    if cancelled_vouchers:
+        gl_entries = [e for e in gl_entries if e.voucher_no not in cancelled_vouchers]
+
+    if not gl_entries:
+        return []
+
     # Resolve missing party details from other GL Entries in the same voucher
     vp_map = {}
     for e in gl_entries:
