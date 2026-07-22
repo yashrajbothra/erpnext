@@ -12,12 +12,28 @@ frappe.query_reports["Payment Planning"] = {
             "label": __("Customer"),
             "fieldtype": "Link",
             "options": "Customer"
+        },
+        {
+            "fieldname": "hide_non_due",
+            "label": __("Hide Non Due Invoices"),
+            "fieldtype": "Check",
+            "default": 1,
+            "on_change": function (query_report) {
+                query_report.refresh();
+            }
         }
     ],
-    "formatter": function(value, row, column, data, default_formatter) {
+    "formatter": function (value, row, column, data, default_formatter) {
         value = default_formatter(value, row, column, data);
         if (column.fieldname == "inv_no" && data && data.actual_inv_no) {
-            value = `<a href="/app/sales-invoice/${data.actual_inv_no}" data-doctype="Sales Invoice" data-name="${data.actual_inv_no}">${value}</a>`;
+            let inv_doctype = data.invoice_doctype || "Sales Invoice";
+            let url_doctype = inv_doctype.toLowerCase().replace(" ", "-");
+            value = `<a href="/app/${url_doctype}/${data.actual_inv_no}" data-doctype="${inv_doctype}" data-name="${data.actual_inv_no}">${value}</a>`;
+        }
+        if (column.fieldname == "received" && data && data.payment_entry) {
+            let doctype = data.payment_doctype || "Payment Entry";
+            let url_doctype = doctype.toLowerCase().replace(" ", "-");
+            value = `<a href="/app/${url_doctype}/${data.payment_entry}" data-doctype="${doctype}" data-name="${data.payment_entry}">${value}</a>`;
         }
         return value;
     }
