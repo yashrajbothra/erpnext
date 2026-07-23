@@ -14,6 +14,12 @@ frappe.query_reports["Payment Planning"] = {
             "options": "Customer"
         },
         {
+            "fieldname": "customer_group",
+            "label": __("Customer Group"),
+            "fieldtype": "Link",
+            "options": "Customer Group"
+        },
+        {
             "fieldname": "hide_non_due",
             "label": __("Hide Non Due Invoices"),
             "fieldtype": "Check",

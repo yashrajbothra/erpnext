@@ -32,6 +32,8 @@ def get_data(filters):
         conditions += f" AND si.company = {frappe.db.escape(filters.get('company'))}"
     if filters and filters.get("customer"):
         conditions += f" AND si.customer = {frappe.db.escape(filters.get('customer'))}"
+    if filters and filters.get("customer_group"):
+        conditions += f" AND si.customer_group = {frappe.db.escape(filters.get('customer_group'))}"
     
     invoices = frappe.db.sql(f"""
         SELECT 
@@ -60,6 +62,8 @@ def get_data(filters):
         je_cond += f" AND je.company = {frappe.db.escape(filters.get('company'))}"
     if filters and filters.get("customer"):
         je_cond += f" AND jea.party = {frappe.db.escape(filters.get('customer'))}"
+    if filters and filters.get("customer_group"):
+        je_cond += f" AND c.customer_group = {frappe.db.escape(filters.get('customer_group'))}"
 
     jv_invoices = frappe.db.sql(f"""
         SELECT 
@@ -95,6 +99,8 @@ def get_data(filters):
         pe_cond += f" AND pe.company = {frappe.db.escape(filters.get('company'))}"
     if filters and filters.get("customer"):
         pe_cond += f" AND pe.party = {frappe.db.escape(filters.get('customer'))}"
+    if filters and filters.get("customer_group"):
+        pe_cond += f" AND c.customer_group = {frappe.db.escape(filters.get('customer_group'))}"
         
     payments_data = frappe.db.sql(f"""
         SELECT 
@@ -122,6 +128,8 @@ def get_data(filters):
         je_cond += f" AND je.company = {frappe.db.escape(filters.get('company'))}"
     if filters and filters.get("customer"):
         je_cond += f" AND jea.party = {frappe.db.escape(filters.get('customer'))}"
+    if filters and filters.get("customer_group"):
+        je_cond += f" AND c.customer_group = {frappe.db.escape(filters.get('customer_group'))}"
 
     jv_data = frappe.db.sql(f"""
         SELECT 
