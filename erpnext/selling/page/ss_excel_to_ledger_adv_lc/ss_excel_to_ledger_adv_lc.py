@@ -104,10 +104,12 @@ def convert_excel(file_url, owner=None):
                     if len(y) == 2:
                         y = "20" + y
                     try:
-                        col_3_parsed = datetime.datetime(int(y), int(g1), int(g2))
+                        # Try DD.MM.YYYY first (g1=day, g2=month)
+                        col_3_parsed = datetime.datetime(int(y), int(g2), int(g1))
                     except ValueError:
                         try:
-                            col_3_parsed = datetime.datetime(int(y), int(g2), int(g1))
+                            # Fallback to MM.DD.YYYY (g1=month, g2=day)
+                            col_3_parsed = datetime.datetime(int(y), int(g1), int(g2))
                         except ValueError: pass
                 if not col_3_parsed:
                     try:
@@ -145,10 +147,12 @@ def convert_excel(file_url, owner=None):
                         if len(y) == 2:
                             y = "20" + y
                         try:
-                            parsed = datetime.datetime(int(y), int(g1), int(g2))
+                            # Try DD.MM.YYYY first (g1=day, g2=month)
+                            parsed = datetime.datetime(int(y), int(g2), int(g1))
                         except ValueError:
                             try:
-                                parsed = datetime.datetime(int(y), int(g2), int(g1))
+                                # Fallback to MM.DD.YYYY (g1=month, g2=day)
+                                parsed = datetime.datetime(int(y), int(g1), int(g2))
                             except ValueError: pass
                     
                     if not parsed:

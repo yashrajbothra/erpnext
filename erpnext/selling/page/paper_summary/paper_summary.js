@@ -5,12 +5,12 @@ frappe.pages['paper-summary'].on_page_load = function (wrapper) {
         single_column: true
     });
 
-    let fixed_account = 'LC - SM55';
+    let fixed_account = 'ADV AC - SM55';
     let company = frappe.defaults.get_default('company') || frappe.boot.sysdefaults.company;
     if (company) {
         frappe.db.get_value('Company', company, 'abbr').then(r => {
             if (r && r.message && r.message.abbr) {
-                fixed_account = `LC - ${r.message.abbr}`;
+                fixed_account = `ADV AC - ${r.message.abbr}`;
             }
         });
     }
@@ -318,7 +318,7 @@ frappe.pages['paper-summary'].on_page_load = function (wrapper) {
 
         for (let i = 0; i < data.length; i++) {
             if (used_indices.has(i)) continue;
-            
+
             let row1 = data[i];
             let matched = false;
 
@@ -326,10 +326,10 @@ frappe.pages['paper-summary'].on_page_load = function (wrapper) {
                 if (used_indices.has(j)) continue;
                 let row2 = data[j];
 
-                if (Math.abs(row1.closing_balance) === Math.abs(row2.closing_balance) && 
+                if (Math.abs(row1.closing_balance) === Math.abs(row2.closing_balance) &&
                     Math.abs(row1.closing_balance) > 0 &&
                     (row1.closing_balance + row2.closing_balance === 0)) {
-                    
+
                     let merged_row = {
                         party: row1.party + ' & ' + row2.party,
                         opening_balance: row1.opening_balance + row2.opening_balance,

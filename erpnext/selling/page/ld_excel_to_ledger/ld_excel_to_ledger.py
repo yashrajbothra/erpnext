@@ -8,6 +8,32 @@ import re
 from frappe.utils.file_manager import save_file
 from frappe.utils import getdate, formatdate
 
+def ensure_account_exists(account_name, company_name, company_abbr):
+    if not account_name: return
+    account_name = str(account_name).strip()
+    if frappe.db.exists("Account", account_name):
+        return
+        
+    try:
+        parent = frappe.db.get_value("Account", {"company": company_name, "is_group": 1, "account_type": "Expense Account"})
+        if not parent:
+            parent = frappe.db.get_value("Account", {"company": company_name, "is_group": 1})
+            
+        if parent:
+            doc = frappe.new_doc("Account")
+            base_account_name = account_name
+            if base_account_name.endswith(f" - {company_abbr}"):
+                base_account_name = base_account_name.replace(f" - {company_abbr}", "").strip()
+            
+            doc.account_name = base_account_name
+            doc.company = company_name
+            doc.parent_account = parent
+            doc.is_group = 0
+            doc.insert(ignore_permissions=True)
+            frappe.db.commit()
+    except Exception as e:
+        frappe.log_error(title="Failed to auto-create account", message=frappe.get_traceback())
+
 @frappe.whitelist()
 def convert_excel(file_url):
     # Load the uploaded file
@@ -41,7 +67,11 @@ def convert_excel(file_url):
         
         # Check for header date row (e.g. "1-1 TO 31-1-2026" or "PORPOSEL")
         # Use word boundary for 'TO' to avoid matching 'MILTON', 'TON', etc.
-        is_date_row = any(re.search(fr'\b{x}\b', row_strs) for x in ["TO", "PORPOSEL", "PROPOSAL", "PORPOSAL", "PURPOSEL"])
+        non_empty_count = sum(1 for v in row if v is not None and str(v).strip() != "")
+        has_keywords = any(re.search(fr'\b{x}\b', row_strs) for x in ["TO", "PORPOSEL", "PROPOSAL", "PORPOSAL", "PURPOSEL"])
+        
+        # We consider it a date row if it has keywords AND few columns, OR if it has very few columns in general (like just a date cell)
+        is_date_row = (has_keywords and non_empty_count <= 4) or (non_empty_count <= 2)
         
         # We only try to set/update header_date if it's a date row OR if we don't have one yet.
         # CRITICAL: Always require a 4-digit year for the batch date to prevent partial dates (Jan 01) from overwriting it.
@@ -98,14 +128,8 @@ def convert_excel(file_url):
             if not header_date:
                 continue
             
-        # skip header rows, summary rows, and empty rows
+        # skip completely empty rows
         if not any(v is not None for v in row): continue
-        if "AMOUNT" in row_strs and "AMT" in row_strs:
-            continue
-        if "TOTAL" in row_strs or "BALANCE" in row_strs:
-            continue
-        if "OPP.BAL." in row_strs or "OP. BAL" in row_strs:
-            continue
             
         # Left side (Receive) based on paper.xlsx:
         # Col 3:AC, 4:AMT, 5:PARTY, 6:DATE, 7:REMARK
@@ -176,12 +200,15 @@ def convert_excel(file_url):
                 final_l_party = l_party
             else:
                 acc_paid_from = l_acc or "Random Account"
-                final_l_party = l_acc
+                final_l_party = l_party or l_acc
 
             if acc_paid_from and not str(acc_paid_from).endswith(f" - {company_abbr}"):
                 acc_paid_from = f"{acc_paid_from} - {company_abbr}"
             
             acc_paid_to = f"LC - {company_abbr}"
+            
+            ensure_account_exists(acc_paid_from, company_name, company_abbr)
+            ensure_account_exists(acc_paid_to, company_name, company_abbr)
             
             out_sheet.append([
                 "Receive", f_posting_date, f_header_date, company_name, l_mode, "Customer", final_l_party ,
@@ -202,12 +229,15 @@ def convert_excel(file_url):
                 final_r_party = r_party
             else:
                 acc_paid_from = r_acc or "Random Account"
-                final_r_party = r_acc
+                final_r_party = r_party or r_acc
 
             if acc_paid_from and not str(acc_paid_from).endswith(f" - {company_abbr}"):
                 acc_paid_from = f"{acc_paid_from} - {company_abbr}"
 
             acc_paid_from_row = f"LC - {company_abbr}"
+
+            ensure_account_exists(acc_paid_from_row, company_name, company_abbr)
+            ensure_account_exists(acc_paid_from, company_name, company_abbr)
 
             out_sheet.append([
                 "Pay", f_posting_r_date, f_header_date, company_name, r_mode, "Customer", final_r_party ,

@@ -466,7 +466,7 @@ def get_general_t_ledger(account, from_date=None, to_date=None, use_entry_date=0
         p_name = party_names.get(party_key, e.party) if party_key else e.party
 
         row = {
-            "date": e.posting_date,          # always posting_date — used for interest/days in JS
+            "date": e.entry_date if (use_entry_date and e.entry_date) else e.posting_date,
             "posting_date": e.posting_date,  # explicit alias for clarity
             "entry_date": str(e.entry_date) if e.entry_date else None,  # creation date, for display when use_entry_date
             "voucher_type": e.voucher_type,

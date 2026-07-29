@@ -8,10 +8,28 @@ frappe.query_reports["Payment Planning"] = {
             "default": frappe.defaults.get_user_default("Company")
         },
         {
-            "fieldname": "customer",
-            "label": __("Customer"),
+            "fieldname": "party_type",
+            "label": __("Party Type"),
             "fieldtype": "Link",
-            "options": "Customer"
+            "options": "DocType",
+            "get_query": function () {
+                return {
+                    filters: {
+                        "name": ["in", ["Customer", "Supplier"]]
+                    }
+                };
+            }
+        },
+        {
+            "fieldname": "party",
+            "label": __("Party"),
+            "fieldtype": "MultiSelectList",
+            "get_data": function (txt) {
+                if (!frappe.query_report.filters) return;
+                let party_type = frappe.query_report.get_filter_value("party_type");
+                if (!party_type) return [];
+                return frappe.db.get_link_options(party_type, txt);
+            }
         },
         {
             "fieldname": "customer_group",
